@@ -1,0 +1,16 @@
+[package]
+name = "pulse-io"
+version = "0.1.0"
+authors = ["Pulse Contributors"]
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+pulse-core = { path = "../pulse-core" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+csv = { workspace = true }
+time = { workspace = true }

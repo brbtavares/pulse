@@ -1,0 +1,27 @@
+[package]
+name = "pulse-core"
+version = "0.1.0"
+authors = ["Pulse Contributors"]
+edition = "2021"
+license = "MIT"
+
+[features]
+rocksdb = ["dep:rocksdb"]
+arrow = ["dep:arrow"]
+parquet = ["dep:parquet"]
+kafka = ["dep:rdkafka"]
+
+[dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+parking_lot = { workspace = true }
+time = { workspace = true }
+csv = { workspace = true }
+rocksdb = { version = "0.21", optional = true }
+arrow = { version = "53", optional = true }
+parquet = { version = "53", optional = true }
+rdkafka = { version = "0.36", optional = true }

@@ -1,0 +1,6 @@
+# Basic clippy configuration
+warns = [
+    "clippy::await_holding_lock",
+    "clippy::cargo_common_metadata",
+    "clippy::dbg_macro",
+]

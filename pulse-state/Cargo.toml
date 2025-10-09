@@ -1,0 +1,16 @@
+[package]
+name = "pulse-state"
+version = "0.1.0"
+authors = ["Pulse Contributors"]
+edition = "2021"
+license = "MIT"
+
+[features]
+rocksdb = ["dep:rocksdb"]
+
+[dependencies]
+pulse-core = { path = "../pulse-core" }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+rocksdb = { version = "0.21", optional = true }

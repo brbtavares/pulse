@@ -1,0 +1,16 @@
+# Rust
+/target/
+/**/*.o
+/**/*.rcgu.o
+/**/*.pdb
+/**/*.rlib
+/**/*.rmeta
+/**/*.d
+Cargo.lock
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
