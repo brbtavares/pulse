@@ -5,6 +5,12 @@ authors = ["Pulse Contributors"]
 edition = "2021"
 license = "MIT"
 
+[features]
+# Optional integrations. Enable per-crate via `--features` or in dependent crates.
+arrow = ["dep:arrow"]
+parquet = ["dep:parquet"]
+kafka = ["dep:rdkafka", "dep:futures"]
+
 [dependencies]
 pulse-core = { path = "../pulse-core" }
 async-trait = { workspace = true }
@@ -14,3 +20,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 csv = { workspace = true }
 time = { workspace = true }
+arrow = { version = "53", optional = true }
+parquet = { version = "53", optional = true }
+# Use rdkafka with tokio integration; avoid compiling unless feature is enabled.
+rdkafka = { version = "0.36", optional = true, default-features = false, features = ["tokio", "cmake-build"] }
+futures = { version = "0.3", optional = true }

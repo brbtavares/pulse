@@ -53,3 +53,28 @@ Output (one JSON per line):
 ```
 
 License: MIT
+
+## Optional integrations
+Pulse supports optional integrations behind feature flags:
+
+- Kafka (rdkafka) for streaming in/out topics
+- Arrow / Parquet for columnar formats (planned minimal sinks/sources)
+
+Enable them per-crate or from the workspace with Cargo features:
+
+```
+# Build pulse-io with Kafka support
+cargo build -p pulse-io --features kafka
+
+# Build pulse-io with Arrow/Parquet support (APIs are experimental)
+cargo build -p pulse-io --features "arrow parquet"
+```
+
+Notes (Windows + Kafka): enabling `kafka` builds the native `librdkafka` by default and requires CMake and MSVC Build Tools.
+
+- Install CMake and Visual Studio Build Tools (C++), then rerun the build.
+- Alternatively, configure dynamic linking to a preinstalled librdkafka and remove the `cmake-build` feature in `pulse-io/Cargo.toml`.
+
+Status:
+- Kafka: basic `KafkaSource` and `KafkaSink` are available behind the `kafka` feature in `pulse-io`.
+- Arrow/Parquet: feature flags are wired; concrete sinks/sources will land next.

@@ -74,6 +74,111 @@ impl Sink for FileSink {
     }
 }
 
+// --- Optional Kafka integration (behind feature flag) ---
+#[cfg(feature = "kafka")]
+mod kafka {
+    use super::*;
+    use anyhow::Context as AnyhowContext;
+    use futures::StreamExt;
+    use rdkafka::consumer::{Consumer, StreamConsumer};
+    use rdkafka::message::Message;
+    use rdkafka::producer::{FutureProducer, FutureRecord};
+    use rdkafka::ClientConfig;
+
+    pub struct KafkaSource {
+        pub brokers: String,
+        pub group_id: String,
+        pub topic: String,
+        pub event_time_field: String,
+    }
+
+    impl KafkaSource {
+        pub fn new(brokers: impl Into<String>, group_id: impl Into<String>, topic: impl Into<String>, event_time_field: impl Into<String>) -> Self {
+            Self { brokers: brokers.into(), group_id: group_id.into(), topic: topic.into(), event_time_field: event_time_field.into() }
+        }
+    }
+
+    #[async_trait]
+    impl Source for KafkaSource {
+        async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
+            let consumer: StreamConsumer = ClientConfig::new()
+                .set("bootstrap.servers", &self.brokers)
+                .set("group.id", &self.group_id)
+                .set("enable.partition.eof", "false")
+                .set("session.timeout.ms", "6000")
+                .set("enable.auto.commit", "true")
+                .create()
+                .context("failed to create kafka consumer")?;
+
+            consumer.subscribe(&[&self.topic]).context("failed to subscribe to topic")?;
+
+            let mut stream = consumer.stream();
+            while let Some(ev) = stream.next().await {
+                match ev {
+                    Ok(m) => {
+                        if let Some(payload) = m.payload_view::<str>() {
+                            let payload = payload.unwrap_or("");
+                            if payload.is_empty() { continue; }
+                            let v: serde_json::Value = match serde_json::from_str(payload) { Ok(v) => v, Err(_) => continue };
+                            let ts_v = v.get(&self.event_time_field).cloned().unwrap_or(serde_json::Value::Null);
+                            let ts = match ts_v {
+                                serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) as i128 * 1_000_000,
+                                serde_json::Value::String(s) => time::OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
+                                    .map(|t| t.unix_timestamp_nanos()).unwrap_or(0),
+                                _ => 0,
+                            };
+                            ctx.collect(Record { event_time: EventTime(ts), value: v });
+                        }
+                    }
+                    Err(_e) => {
+                        // For now, skip errors to keep the source resilient.
+                        continue;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    pub struct KafkaSink {
+        pub brokers: String,
+        pub topic: String,
+        pub key_field: Option<String>,
+    }
+
+    impl KafkaSink {
+        pub fn new(brokers: impl Into<String>, topic: impl Into<String>) -> Self {
+            Self { brokers: brokers.into(), topic: topic.into(), key_field: None }
+        }
+        pub fn with_key_field(mut self, key_field: impl Into<String>) -> Self {
+            self.key_field = Some(key_field.into());
+            self
+        }
+    }
+
+    #[async_trait]
+    impl Sink for KafkaSink {
+        async fn on_element(&mut self, record: Record) -> Result<()> {
+            let producer: FutureProducer = ClientConfig::new()
+                .set("bootstrap.servers", &self.brokers)
+                .create()
+                .context("failed to create kafka producer")?;
+
+            let payload = serde_json::to_string(&record.value)?;
+            let key = self.key_field.as_ref().and_then(|k| record.value.get(k).and_then(|v| v.as_str()).map(|s| s.to_string()));
+
+            let mut fr = FutureRecord::to(&self.topic).payload(&payload);
+            if let Some(k) = key.as_deref() { fr = fr.key(k); }
+
+            let _ = producer.send(fr, std::time::Duration::from_secs(0)).await;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "kafka")]
+pub use kafka::{KafkaSink, KafkaSource};
+
 #[cfg(test)]
 mod tests {
     use super::*;
