@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use pulse_core::{Context, Operator, Record, Result, Watermark};
+use pulse_core::{Context, EventTime, Operator, Record, Result, Watermark};
 
 #[async_trait]
 pub trait FnMap: Send + Sync {
@@ -123,9 +123,377 @@ impl Operator for Aggregate {
 }
 
 pub mod prelude {
-    pub use super::{Aggregate, AggregationKind, Filter, FnFilter, FnMap, KeyBy, Map, WindowTumbling};
+    pub use super::{
+        Aggregate,
+        AggregationKind,
+        Filter,
+        FnFilter,
+        FnMap,
+        KeyBy,
+        Map,
+        WindowTumbling,
+        WindowKind,
+        AggKind,
+        WindowedAggregate,
+    };
 }
 
+// ===== Windowed, configurable aggregations =====
+
+#[derive(Clone, Debug)]
+pub enum WindowKind {
+    Tumbling { size_ms: i64 },
+    Sliding { size_ms: i64, slide_ms: i64 },
+    Session { gap_ms: i64 },
+}
+
+#[derive(Clone, Debug)]
+pub enum AggKind {
+    Count,
+    Sum { field: String },
+    Avg { field: String },
+    Distinct { field: String },
+}
+
+#[derive(Clone, Debug, Default)]
+enum AggState {
+    #[default]
+    Empty,
+    Count(i64),
+    Sum { sum: f64, count: i64 }, // count is reused for avg
+    Distinct(std::collections::HashSet<String>),
+}
+
+fn as_f64(v: &serde_json::Value) -> f64 {
+    match v {
+        serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
+        serde_json::Value::String(s) => s.parse::<f64>().unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+fn stringify(v: &serde_json::Value) -> String { match v { serde_json::Value::String(s) => s.clone(), other => other.to_string() } }
+
+pub struct WindowedAggregate {
+    pub key_field: String,
+    pub win: WindowKind,
+    pub agg: AggKind,
+    // For tumbling/sliding: (end_ms, key) -> state, and track start_ms via map
+    by_window: HashMap<(i128, serde_json::Value), (i128 /*start_ms*/, AggState)>,
+    // For session: key -> (start_ms, last_seen_ms, state)
+    sessions: HashMap<serde_json::Value, (i128, i128, AggState)>,
+}
+
+impl WindowedAggregate {
+    pub fn tumbling_count(key_field: impl Into<String>, size_ms: i64) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Tumbling { size_ms }, agg: AggKind::Count, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+    pub fn tumbling_sum(key_field: impl Into<String>, size_ms: i64, field: impl Into<String>) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Tumbling { size_ms }, agg: AggKind::Sum { field: field.into() }, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+    pub fn tumbling_avg(key_field: impl Into<String>, size_ms: i64, field: impl Into<String>) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Tumbling { size_ms }, agg: AggKind::Avg { field: field.into() }, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+    pub fn tumbling_distinct(key_field: impl Into<String>, size_ms: i64, field: impl Into<String>) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Tumbling { size_ms }, agg: AggKind::Distinct { field: field.into() }, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+
+    pub fn sliding_count(key_field: impl Into<String>, size_ms: i64, slide_ms: i64) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Sliding { size_ms, slide_ms }, agg: AggKind::Count, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+    pub fn sliding_sum(key_field: impl Into<String>, size_ms: i64, slide_ms: i64, field: impl Into<String>) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Sliding { size_ms, slide_ms }, agg: AggKind::Sum { field: field.into() }, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+    pub fn sliding_avg(key_field: impl Into<String>, size_ms: i64, slide_ms: i64, field: impl Into<String>) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Sliding { size_ms, slide_ms }, agg: AggKind::Avg { field: field.into() }, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+    pub fn sliding_distinct(key_field: impl Into<String>, size_ms: i64, slide_ms: i64, field: impl Into<String>) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Sliding { size_ms, slide_ms }, agg: AggKind::Distinct { field: field.into() }, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+
+    pub fn session_count(key_field: impl Into<String>, gap_ms: i64) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Session { gap_ms }, agg: AggKind::Count, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+    pub fn session_sum(key_field: impl Into<String>, gap_ms: i64, field: impl Into<String>) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Session { gap_ms }, agg: AggKind::Sum { field: field.into() }, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+    pub fn session_avg(key_field: impl Into<String>, gap_ms: i64, field: impl Into<String>) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Session { gap_ms }, agg: AggKind::Avg { field: field.into() }, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+    pub fn session_distinct(key_field: impl Into<String>, gap_ms: i64, field: impl Into<String>) -> Self {
+        Self { key_field: key_field.into(), win: WindowKind::Session { gap_ms }, agg: AggKind::Distinct { field: field.into() }, by_window: HashMap::new(), sessions: HashMap::new() }
+    }
+}
+
+fn update_state(state: &mut AggState, agg: &AggKind, value: &serde_json::Value) {
+    match agg {
+        AggKind::Count => {
+            *state = match std::mem::take(state) {
+                AggState::Empty => AggState::Count(1),
+                AggState::Count(c) => AggState::Count(c + 1),
+                other => other,
+            };
+        }
+        AggKind::Sum { field } => {
+            let x = as_f64(value.get(field).unwrap_or(&serde_json::Value::Null));
+            *state = match std::mem::take(state) {
+                AggState::Empty => AggState::Sum { sum: x, count: 1 },
+                AggState::Sum { sum, count } => AggState::Sum { sum: sum + x, count: count + 1 },
+                other => other,
+            };
+        }
+        AggKind::Avg { field } => {
+            let x = as_f64(value.get(field).unwrap_or(&serde_json::Value::Null));
+            *state = match std::mem::take(state) {
+                AggState::Empty => AggState::Sum { sum: x, count: 1 },
+                AggState::Sum { sum, count } => AggState::Sum { sum: sum + x, count: count + 1 },
+                other => other,
+            };
+        }
+        AggKind::Distinct { field } => {
+            let s = stringify(value.get(field).unwrap_or(&serde_json::Value::Null));
+            *state = match std::mem::take(state) {
+                AggState::Empty => {
+                    let mut set = std::collections::HashSet::new();
+                    set.insert(s);
+                    AggState::Distinct(set)
+                }
+                AggState::Distinct(mut set) => { set.insert(s); AggState::Distinct(set) }
+                other => other,
+            };
+        }
+    }
+}
+
+fn finalize_value(state: &AggState, agg: &AggKind) -> serde_json::Value {
+    match (state, agg) {
+        (AggState::Count(c), _) => serde_json::json!(*c),
+        (AggState::Sum { sum, .. }, AggKind::Sum { .. }) => serde_json::json!(sum),
+        (AggState::Sum { sum, count }, AggKind::Avg { .. }) => {
+            let avg = if *count > 0 { *sum / (*count as f64) } else { 0.0 };
+            serde_json::json!(avg)
+        }
+        (AggState::Distinct(set), AggKind::Distinct { .. }) => serde_json::json!(set.len() as i64),
+        _ => serde_json::json!(null),
+    }
+}
+
+#[async_trait]
+impl Operator for WindowedAggregate {
+    async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
+        let ts_ms = rec.event_time.0 / 1_000_000; // nanos -> ms
+        let key = rec.value.get(&self.key_field).cloned().unwrap_or(serde_json::Value::Null);
+
+        match self.win {
+            WindowKind::Tumbling { size_ms } => {
+                let start = (ts_ms / (size_ms as i128)) * (size_ms as i128);
+                let end = start + (size_ms as i128);
+                let entry = self.by_window.entry((end, key.clone())).or_insert((start, AggState::Empty));
+                update_state(&mut entry.1, &self.agg, &rec.value);
+                // Optional: schedule a timer at end
+                let _ = ctx.timers().register_event_time_timer(pulse_core::EventTime(end * 1_000_000), None).await;
+            }
+            WindowKind::Sliding { size_ms, slide_ms } => {
+                let k = (size_ms / slide_ms) as i128;
+                let anchor = (ts_ms / (slide_ms as i128)) * (slide_ms as i128);
+                for j in 0..k {
+                    let start = anchor - (j * (slide_ms as i128));
+                    let end = start + (size_ms as i128);
+                    if start <= ts_ms && end > ts_ms {
+                        let entry = self.by_window.entry((end, key.clone())).or_insert((start, AggState::Empty));
+                        update_state(&mut entry.1, &self.agg, &rec.value);
+                        let _ = ctx.timers().register_event_time_timer(pulse_core::EventTime(end * 1_000_000), None).await;
+                    }
+                }
+            }
+            WindowKind::Session { gap_ms } => {
+                let e = self.sessions.entry(key.clone()).or_insert((ts_ms, ts_ms, AggState::Empty));
+                let (start, last_seen, state) = e;
+                if ts_ms - *last_seen <= (gap_ms as i128) {
+                    *last_seen = ts_ms;
+                    update_state(state, &self.agg, &rec.value);
+                } else {
+                    // close previous session
+                    let mut out = serde_json::Map::new();
+                    out.insert("window_start_ms".into(), serde_json::json!(*start));
+                    out.insert("window_end_ms".into(), serde_json::json!(*last_seen + (gap_ms as i128)));
+                    out.insert("key".into(), key.clone());
+                    let val = finalize_value(state, &self.agg);
+                    match self.agg {
+                        AggKind::Count => { out.insert("count".into(), val); },
+                        AggKind::Sum { .. } => { out.insert("sum".into(), val); },
+                        AggKind::Avg { .. } => { out.insert("avg".into(), val); },
+                        AggKind::Distinct { .. } => { out.insert("distinct_count".into(), val); },
+                    }
+                    ctx.collect(Record { event_time: rec.event_time, value: serde_json::Value::Object(out) });
+                    // start new
+                    *start = ts_ms;
+                    *last_seen = ts_ms;
+                    *state = AggState::Empty;
+                    update_state(state, &self.agg, &rec.value);
+                }
+                // schedule close timer
+                let end = ts_ms + (gap_ms as i128);
+                let _ = ctx.timers().register_event_time_timer(pulse_core::EventTime(end * 1_000_000), None).await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_watermark(&mut self, ctx: &mut dyn Context, wm: Watermark) -> Result<()> {
+        let wm_ms = wm.0 .0 / 1_000_000;
+
+        match self.win {
+            WindowKind::Tumbling { .. } | WindowKind::Sliding { .. } => {
+                // Emit and clear all windows with end <= wm
+                let mut to_emit: Vec<((i128, serde_json::Value), (i128, AggState))> = self
+                    .by_window
+                    .iter()
+                    .filter(|((end, _), _)| *end <= wm_ms)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                for ((end, key), (start, state)) in to_emit.drain(..) {
+                    let mut out = serde_json::Map::new();
+                    out.insert("window_start_ms".into(), serde_json::json!(start));
+                    out.insert("window_end_ms".into(), serde_json::json!(end));
+                    out.insert("key".into(), key.clone());
+                    let val = finalize_value(&state, &self.agg);
+                    match self.agg {
+                        AggKind::Count => { out.insert("count".into(), val); },
+                        AggKind::Sum { .. } => { out.insert("sum".into(), val); },
+                        AggKind::Avg { .. } => { out.insert("avg".into(), val); },
+                        AggKind::Distinct { .. } => { out.insert("distinct_count".into(), val); },
+                    }
+                    ctx.collect(Record { event_time: EventTime(wm.0 .0), value: serde_json::Value::Object(out) });
+                    self.by_window.remove(&(end, key));
+                }
+            }
+            WindowKind::Session { gap_ms } => {
+                // Close sessions whose inactivity + gap <= wm
+                let keys: Vec<_> = self.sessions.keys().cloned().collect();
+                for key in keys {
+                    if let Some((start, last_seen, state)) = self.sessions.get(&key).cloned() {
+                        if last_seen + (gap_ms as i128) <= wm_ms {
+                            let mut out = serde_json::Map::new();
+                            out.insert("window_start_ms".into(), serde_json::json!(start));
+                            out.insert("window_end_ms".into(), serde_json::json!(last_seen + (gap_ms as i128)));
+                            out.insert("key".into(), key.clone());
+                            let val = finalize_value(&state, &self.agg);
+                            match self.agg {
+                                AggKind::Count => { out.insert("count".into(), val); },
+                                AggKind::Sum { .. } => { out.insert("sum".into(), val); },
+                                AggKind::Avg { .. } => { out.insert("avg".into(), val); },
+                                AggKind::Distinct { .. } => { out.insert("distinct_count".into(), val); },
+                            }
+                            ctx.collect(Record { event_time: EventTime(wm.0 .0), value: serde_json::Value::Object(out) });
+                            self.sessions.remove(&key);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_timer(&mut self, ctx: &mut dyn Context, when: EventTime, _key: Option<Vec<u8>>) -> Result<()> {
+        // Treat timers same as watermarks for emission, but only for windows ending at `when`.
+        let when_ms = when.0 / 1_000_000;
+
+        match self.win {
+            WindowKind::Tumbling { .. } | WindowKind::Sliding { .. } => {
+                let mut to_emit: Vec<((i128, serde_json::Value), (i128, AggState))> = self
+                    .by_window
+                    .iter()
+                    .filter(|((end, _), _)| *end <= when_ms)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                for ((end, key), (start, state)) in to_emit.drain(..) {
+                    let mut out = serde_json::Map::new();
+                    out.insert("window_start_ms".into(), serde_json::json!(start));
+                    out.insert("window_end_ms".into(), serde_json::json!(end));
+                    out.insert("key".into(), key.clone());
+                    let val = finalize_value(&state, &self.agg);
+                    match self.agg {
+                        AggKind::Count => { out.insert("count".into(), val); },
+                        AggKind::Sum { .. } => { out.insert("sum".into(), val); },
+                        AggKind::Avg { .. } => { out.insert("avg".into(), val); },
+                        AggKind::Distinct { .. } => { out.insert("distinct_count".into(), val); },
+                    }
+                    ctx.collect(Record { event_time: when, value: serde_json::Value::Object(out) });
+                    self.by_window.remove(&(end, key));
+                }
+            }
+            WindowKind::Session { gap_ms } => {
+                let keys: Vec<_> = self.sessions.keys().cloned().collect();
+                for key in keys {
+                    if let Some((start, last_seen, state)) = self.sessions.get(&key).cloned() {
+                        if last_seen + (gap_ms as i128) <= when_ms {
+                            let mut out = serde_json::Map::new();
+                            out.insert("window_start_ms".into(), serde_json::json!(start));
+                            out.insert("window_end_ms".into(), serde_json::json!(last_seen + (gap_ms as i128)));
+                            out.insert("key".into(), key.clone());
+                            let val = finalize_value(&state, &self.agg);
+                            match self.agg {
+                                AggKind::Count => { out.insert("count".into(), val); },
+                                AggKind::Sum { .. } => { out.insert("sum".into(), val); },
+                                AggKind::Avg { .. } => { out.insert("avg".into(), val); },
+                                AggKind::Distinct { .. } => { out.insert("distinct_count".into(), val); },
+                            }
+                            ctx.collect(Record { event_time: when, value: serde_json::Value::Object(out) });
+                            self.sessions.remove(&key);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use pulse_core::{Context, EventTime, KvState, Record, Result, Timers, Watermark};
+    use std::sync::Arc;
+
+    struct TestState;
+    #[async_trait]
+    impl KvState for TestState {
+        async fn get(&self, _key: &[u8]) -> Result<Option<Vec<u8>>> { Ok(None) }
+        async fn put(&self, _key: &[u8], _value: Vec<u8>) -> Result<()> { Ok(()) }
+        async fn delete(&self, _key: &[u8]) -> Result<()> { Ok(()) }
+    }
+    struct TestTimers;
+    #[async_trait]
+    impl Timers for TestTimers { async fn register_event_time_timer(&self, _when: EventTime, _key: Option<Vec<u8>>) -> Result<()> { Ok(()) } }
+
+    struct TestCtx {
+        out: Vec<Record>,
+        kv: Arc<dyn KvState>,
+        timers: Arc<dyn Timers>,
+    }
+    #[async_trait]
+    impl Context for TestCtx {
+        fn collect(&mut self, record: Record) { self.out.push(record); }
+        fn watermark(&mut self, _wm: Watermark) {}
+        fn kv(&self) -> Arc<dyn KvState> { self.kv.clone() }
+        fn timers(&self) -> Arc<dyn Timers> { self.timers.clone() }
+    }
+
+    fn record_with(ts_ms: i128, key: &str) -> Record { Record { event_time: EventTime(ts_ms * 1_000_000), value: serde_json::json!({"word": key}) } }
+
+    #[tokio::test]
+    async fn tumbling_count_emits_on_watermark() {
+        let mut op = WindowedAggregate::tumbling_count("word", 60_000);
+        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        op.on_element(&mut ctx, record_with(1_000, "a")).await.unwrap();
+        op.on_element(&mut ctx, record_with(1_010, "a")).await.unwrap();
+        // Watermark after end of window 0..60000
+        op.on_watermark(&mut ctx, Watermark(EventTime(60_000 * 1_000_000))).await.unwrap();
+        assert_eq!(ctx.out.len(), 1);
+        assert_eq!(ctx.out[0].value["count"], serde_json::json!(2));
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
