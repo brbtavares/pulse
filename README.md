@@ -52,8 +52,6 @@ Output (one JSON per line):
 {"window_start_ms":1704067200000,"key":"hello","count":2}
 ```
 
-License: MIT
-
 ## Optional integrations
 Pulse supports optional integrations behind feature flags:
 
