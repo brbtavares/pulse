@@ -6,11 +6,11 @@ build:
 test:
     cargo test --all
 
-run-example FILE="examples/wordcount.jsonl":
+example FILE="examples/wordcount.jsonl":
     cargo run -p pulse-examples -- {{FILE}}
 
 # Format the workspace
-fmt:
+format:
     cargo fmt --all
 
 # Lint with clippy and treat warnings as errors
