@@ -1,3 +1,6 @@
+//! Wordcount example pipeline:
+//! FileSource(JSONL) -> Map(split words) -> KeyBy(word) -> Aggregate(count per minute) -> FileSink(stdout)
+//! Run with: `cargo run -p pulse-examples -- pulse-examples/examples/wordcount.jsonl`
 use anyhow::Result;
 use pulse_core::Executor;
 use pulse_io::{FileSink, FileSource};

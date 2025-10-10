@@ -1,17 +1,20 @@
 //! pulse-io: simple I/O sources and sinks.
-//! - FileSource: reads JSONL or CSV
-//! - FileSink: writes JSONL (stdout or file)
+//! - `FileSource`: reads JSONL or CSV and emits JSON records with event-time
+//! - `FileSink`: writes JSON lines to stdout or a file
 
 use async_trait::async_trait;
 use pulse_core::{Context, EventTime, Record, Result, Sink, Source};
 use tokio::io::AsyncBufReadExt;
 
 #[derive(Clone)]
+/// Supported file formats for `FileSource`.
 pub enum FileFormat {
     Jsonl,
     Csv,
 }
 
+/// Reads a file (JSONL or CSV) and emits records.
+/// - `event_time_field`: name of the timestamp field (RFC3339 string or epoch ms)
 pub struct FileSource {
     pub path: String,
     pub format: FileFormat,
@@ -88,6 +91,7 @@ impl Source for FileSource {
     }
 }
 
+/// Writes each record value as a single JSON line to stdout or a file.
 pub struct FileSink {
     pub path: Option<String>,
 }

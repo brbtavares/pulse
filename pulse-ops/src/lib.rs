@@ -1,5 +1,11 @@
 //! pulse-ops: standard operators built on top of pulse-core.
-//! Operators: Map, Filter, KeyBy, WindowTumbling, Aggregate (simplified).
+//!
+//! Included operators:
+//! - `Map`: one-to-many mapping of JSON payloads
+//! - `Filter`: predicate-based filtering
+//! - `KeyBy`: materialize a `key` field from an existing field
+//! - `Aggregate` (simplified): per-minute running count updates
+//! - `WindowedAggregate`: configurable windows (tumbling/sliding/session) with count/sum/avg/distinct
 
 use std::collections::HashMap;
 
@@ -27,6 +33,15 @@ where
     }
 }
 
+/// Map operator: applies a user function that returns zero or more outputs per input.
+/// Map operator: applies a user function that returns zero or more outputs per input.
+///
+/// Example
+/// ```no_run
+/// use pulse_ops::{Map, MapFn};
+/// let map = Map::new(MapFn::new(|v: serde_json::Value| vec![v]));
+/// # let _ = map;
+/// ```
 pub struct Map<F> {
     func: F,
 }
@@ -74,6 +89,14 @@ where
     }
 }
 
+/// Filter operator: keeps inputs that satisfy the predicate.
+///
+/// Example
+/// ```no_run
+/// use pulse_ops::{Filter, FilterFn};
+/// let filter = Filter::new(FilterFn::new(|v: &serde_json::Value| v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false)));
+/// # let _ = filter;
+/// ```
 pub struct Filter<F> {
     pred: F,
 }
@@ -96,6 +119,14 @@ where
     }
 }
 
+/// KeyBy operator: copies an existing field into a canonical `key` field.
+///
+/// Example
+/// ```no_run
+/// use pulse_ops::KeyBy;
+/// let key_by = KeyBy::new("word");
+/// # let _ = key_by;
+/// ```
 pub struct KeyBy {
     field: String,
 }
@@ -124,6 +155,7 @@ impl Operator for KeyBy {
     }
 }
 
+/// Fixed-size tumbling window helper (legacy from the simple Aggregate).
 #[derive(Clone, Copy)]
 pub struct WindowTumbling {
     pub size_ms: i64,
@@ -134,6 +166,15 @@ impl WindowTumbling {
     }
 }
 
+/// Simple aggregate that maintains a per-minute count per `key_field`.
+/// Simple aggregate that maintains a per-minute count per `key_field`.
+///
+/// Example
+/// ```no_run
+/// use pulse_ops::Aggregate;
+/// let agg = Aggregate::count_per_window("key", "word");
+/// # let _ = agg;
+/// ```
 pub struct Aggregate {
     pub key_field: String,
     pub value_field: String,
@@ -141,6 +182,7 @@ pub struct Aggregate {
     windows: HashMap<(i128, serde_json::Value), i64>, // (window_start, key) -> count
 }
 
+/// Supported aggregation kinds for the simple `Aggregate`.
 #[derive(Clone, Copy)]
 pub enum AggregationKind {
     Count,
@@ -196,6 +238,7 @@ pub mod prelude {
 
 // ===== Windowed, configurable aggregations =====
 
+/// Kinds of windows supported by `WindowedAggregate`.
 #[derive(Clone, Debug)]
 pub enum WindowKind {
     Tumbling { size_ms: i64 },
@@ -203,6 +246,7 @@ pub enum WindowKind {
     Session { gap_ms: i64 },
 }
 
+/// Supported aggregation kinds for `WindowedAggregate`.
 #[derive(Clone, Debug)]
 pub enum AggKind {
     Count,
@@ -238,6 +282,16 @@ fn stringify(v: &serde_json::Value) -> String {
     }
 }
 
+/// A stateful windowed aggregation operator supporting different windows & aggregations.
+/// A stateful windowed aggregation operator supporting different windows & aggregations.
+///
+/// Examples
+/// ```no_run
+/// use pulse_ops::WindowedAggregate;
+/// // Tumbling count of words per 60s window
+/// let op = WindowedAggregate::tumbling_count("word", 60_000);
+/// # let _ = op;
+/// ```
 pub struct WindowedAggregate {
     pub key_field: String,
     pub win: WindowKind,

@@ -43,6 +43,8 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+/// Logical event-time represented as Unix epoch nanoseconds.
+/// Use [`EventTime::now`] for wall-clock timestamps when needed.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EventTime(pub i128); // epoch nanos
 
@@ -53,6 +55,9 @@ impl EventTime {
     }
 }
 
+/// A data record flowing through the pipeline.
+/// - `event_time` drives windowing and watermark/timer semantics
+/// - `value` is an arbitrary JSON payload in this PoC
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
     pub event_time: EventTime,
@@ -71,6 +76,7 @@ impl Record {
     }
 }
 
+/// A low-watermark indicating no future records <= this event-time are expected.
 #[derive(Debug, Clone, Copy)]
 pub struct Watermark(pub EventTime);
 
@@ -88,6 +94,7 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Key-Value state abstraction for stateful operators.
 #[async_trait::async_trait]
 pub trait KvState: Send + Sync {
     async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
@@ -95,11 +102,13 @@ pub trait KvState: Send + Sync {
     async fn delete(&self, key: &[u8]) -> Result<()>;
 }
 
+/// Timer service for event-time callbacks requested by operators.
 #[async_trait::async_trait]
 pub trait Timers: Send + Sync {
     async fn register_event_time_timer(&self, when: EventTime, key: Option<Vec<u8>>) -> Result<()>;
 }
 
+/// Execution context visible to Sources and Operators.
 #[async_trait::async_trait]
 pub trait Context: Send {
     fn collect(&mut self, record: Record);
@@ -108,11 +117,13 @@ pub trait Context: Send {
     fn timers(&self) -> Arc<dyn Timers>;
 }
 
+/// A data source that pushes records into the pipeline.
 #[async_trait::async_trait]
 pub trait Source: Send {
     async fn run(&mut self, ctx: &mut dyn Context) -> Result<()>;
 }
 
+/// Core operator interface. Override `on_watermark`/`on_timer` if needed.
 #[async_trait::async_trait]
 pub trait Operator: Send {
     async fn on_element(&mut self, ctx: &mut dyn Context, record: Record) -> Result<()>;
@@ -129,6 +140,7 @@ pub trait Operator: Send {
     }
 }
 
+/// A terminal sink that receives records (and optional watermarks).
 #[async_trait::async_trait]
 pub trait Sink: Send {
     async fn on_element(&mut self, record: Record) -> Result<()>;
@@ -166,6 +178,7 @@ impl KvState for SimpleInMemoryState {
     }
 }
 
+/// Minimal in-memory timer service used by the demo executor.
 #[derive(Clone, Default)]
 pub struct SimpleTimers;
 
@@ -177,6 +190,8 @@ impl Timers for SimpleTimers {
     }
 }
 
+/// A tiny, single-pipeline executor.
+/// Wires: Source -> Operators -> Sink. Drives watermarks and event-time timers.
 pub struct Executor {
     source: Option<Box<dyn Source>>,
     operators: Vec<Box<dyn Operator>>,
@@ -186,6 +201,7 @@ pub struct Executor {
 }
 
 impl Executor {
+    /// Create a new empty executor.
     pub fn new() -> Self {
         Self {
             source: None,
@@ -196,21 +212,26 @@ impl Executor {
         }
     }
 
+    /// Set the pipeline source.
     pub fn source<S: Source + 'static>(&mut self, s: S) -> &mut Self {
         self.source = Some(Box::new(s));
         self
     }
 
+    /// Append an operator to the pipeline.
     pub fn operator<O: Operator + 'static>(&mut self, o: O) -> &mut Self {
         self.operators.push(Box::new(o));
         self
     }
 
+    /// Set the pipeline sink.
     pub fn sink<K: Sink + 'static>(&mut self, s: K) -> &mut Self {
         self.sink = Some(Box::new(s));
         self
     }
 
+    /// Run the pipeline to completion. The loop exits when the source finishes
+    /// and the internal channel closes. Watermarks are propagated and due timers fired.
     pub async fn run(&mut self) -> Result<()> {
         let kv = self.kv.clone();
         let timers = self.timers.clone();

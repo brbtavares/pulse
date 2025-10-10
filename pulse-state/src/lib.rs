@@ -1,5 +1,5 @@
 //! pulse-state: state layer
-//! Provides InMemoryState and optional RocksDB backend.
+//! Provides `InMemoryState` and an optional `RocksDbState` backend behind the `rocksdb` feature.
 
 use std::sync::Arc;
 
@@ -13,6 +13,7 @@ struct Inner {
 }
 
 #[derive(Clone)]
+/// A simple in-memory `KvState` implementation backed by a `HashMap`.
 pub struct InMemoryState(Arc<Mutex<Inner>>);
 
 impl Default for InMemoryState {
@@ -40,6 +41,7 @@ impl KvState for InMemoryState {
 pub mod rocks {
     use super::*;
     use pulse_core::Result;
+    /// A RocksDB-backed `KvState` (enable with `--features rocksdb`).
     pub struct RocksDbState {
         db: rocksdb::DB,
     }
