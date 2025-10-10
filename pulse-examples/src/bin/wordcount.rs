@@ -1,7 +1,7 @@
 use anyhow::Result;
 use pulse_core::Executor;
-use pulse_io::{FileSource, FileSink};
-use pulse_ops::{Map, MapFn, KeyBy, Aggregate};
+use pulse_io::{FileSink, FileSource};
+use pulse_ops::{Aggregate, KeyBy, Map, MapFn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,8 +25,7 @@ async fn main() -> Result<()> {
     // Aggregate: count per minute per key
     let agg = Aggregate::count_per_window("key", "word");
 
-    exec
-    .source(FileSource::jsonl(input, "event_time"))
+    exec.source(FileSource::jsonl(input, "event_time"))
         .operator(mapper)
         .operator(key_by)
         .operator(agg)
@@ -39,12 +38,18 @@ async fn main() -> Result<()> {
 fn resolve_input_path(arg: Option<&str>) -> String {
     use std::path::PathBuf;
     // Default to crate-local examples/wordcount.jsonl
-    let default = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples").join("wordcount.jsonl");
+    let default = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("wordcount.jsonl");
     if let Some(p) = arg {
         let candidate = PathBuf::from(p);
-        if candidate.exists() { return candidate.to_string_lossy().to_string(); }
+        if candidate.exists() {
+            return candidate.to_string_lossy().to_string();
+        }
         let candidate2 = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(p);
-        if candidate2.exists() { return candidate2.to_string_lossy().to_string(); }
+        if candidate2.exists() {
+            return candidate2.to_string_lossy().to_string();
+        }
     }
     default.to_string_lossy().to_string()
 }

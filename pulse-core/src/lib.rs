@@ -18,19 +18,19 @@
 //!         Ok(())
 //!     }
 //! }
-//! 
+//!
 //! struct MyOp;
 //! #[async_trait::async_trait]
 //! impl Operator for MyOp {
 //!     async fn on_element(&mut self, _ctx: &mut dyn Context, _rec: Record) -> Result<()> { Ok(()) }
 //! }
-//! 
+//!
 //! struct MySink;
 //! #[async_trait::async_trait]
 //! impl Sink for MySink {
 //!     async fn on_element(&mut self, _rec: Record) -> Result<()> { Ok(()) }
 //! }
-//! 
+//!
 //! let mut exec = pulse_core::Executor::new();
 //! exec.source(MySource).operator(MyOp).sink(MySink);
 //! exec.run().await?;
@@ -60,8 +60,15 @@ pub struct Record {
 }
 
 impl Record {
-    pub fn new(event_time: EventTime, value: serde_json::Value) -> Self { Self { event_time, value } }
-    pub fn from_value<V: Into<serde_json::Value>>(v: V) -> Self { Self { event_time: EventTime::now(), value: v.into() } }
+    pub fn new(event_time: EventTime, value: serde_json::Value) -> Self {
+        Self { event_time, value }
+    }
+    pub fn from_value<V: Into<serde_json::Value>>(v: V) -> Self {
+        Self {
+            event_time: EventTime::now(),
+            value: v.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,14 +116,25 @@ pub trait Source: Send {
 #[async_trait::async_trait]
 pub trait Operator: Send {
     async fn on_element(&mut self, ctx: &mut dyn Context, record: Record) -> Result<()>;
-    async fn on_watermark(&mut self, _ctx: &mut dyn Context, _wm: Watermark) -> Result<()> { Ok(()) }
-    async fn on_timer(&mut self, _ctx: &mut dyn Context, _when: EventTime, _key: Option<Vec<u8>>) -> Result<()> { Ok(()) }
+    async fn on_watermark(&mut self, _ctx: &mut dyn Context, _wm: Watermark) -> Result<()> {
+        Ok(())
+    }
+    async fn on_timer(
+        &mut self,
+        _ctx: &mut dyn Context,
+        _when: EventTime,
+        _key: Option<Vec<u8>>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
 pub trait Sink: Send {
     async fn on_element(&mut self, record: Record) -> Result<()>;
-    async fn on_watermark(&mut self, _wm: Watermark) -> Result<()> { Ok(()) }
+    async fn on_watermark(&mut self, _wm: Watermark) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -128,7 +146,9 @@ struct SimpleStateInner {
 pub struct SimpleInMemoryState(Arc<Mutex<SimpleStateInner>>);
 
 impl Default for SimpleInMemoryState {
-    fn default() -> Self { Self(Arc::new(Mutex::new(SimpleStateInner::default()))) }
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new(SimpleStateInner::default())))
+    }
 }
 
 #[async_trait::async_trait]
@@ -197,7 +217,11 @@ impl Executor {
 
         // Shared timer queue used to schedule per-operator event-time timers
         #[derive(Clone)]
-        struct TimerEntry { op_idx: usize, when: EventTime, key: Option<Vec<u8>> }
+        struct TimerEntry {
+            op_idx: usize,
+            when: EventTime,
+            key: Option<Vec<u8>>,
+        }
         #[derive(Clone, Default)]
         struct SharedTimers(Arc<Mutex<Vec<TimerEntry>>>);
         impl SharedTimers {
@@ -219,7 +243,10 @@ impl Executor {
             }
         }
 
-        enum EventMsg { Data(Record), Wm(Watermark) }
+        enum EventMsg {
+            Data(Record),
+            Wm(Watermark),
+        }
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<EventMsg>();
 
         struct ExecCtx {
@@ -227,27 +254,39 @@ impl Executor {
             kv: Arc<dyn KvState>,
             timers: Arc<dyn Timers>,
         }
-        
+
         #[async_trait::async_trait]
         impl Context for ExecCtx {
-            fn collect(&mut self, record: Record) { let _ = self.tx.send(EventMsg::Data(record)); }
-            fn watermark(&mut self, wm: Watermark) { let _ = self.tx.send(EventMsg::Wm(wm)); }
-            fn kv(&self) -> Arc<dyn KvState> { self.kv.clone() }
-            fn timers(&self) -> Arc<dyn Timers> { self.timers.clone() }
+            fn collect(&mut self, record: Record) {
+                let _ = self.tx.send(EventMsg::Data(record));
+            }
+            fn watermark(&mut self, wm: Watermark) {
+                let _ = self.tx.send(EventMsg::Wm(wm));
+            }
+            fn kv(&self) -> Arc<dyn KvState> {
+                self.kv.clone()
+            }
+            fn timers(&self) -> Arc<dyn Timers> {
+                self.timers.clone()
+            }
         }
 
-    let mut source = self.source.take().ok_or_else(|| anyhow::anyhow!("no source"))?;
-    let mut ops = std::mem::take(&mut self.operators);
-    let mut sink = self.sink.take().ok_or_else(|| anyhow::anyhow!("no sink"))?;
+        let mut source = self.source.take().ok_or_else(|| anyhow::anyhow!("no source"))?;
+        let mut ops = std::mem::take(&mut self.operators);
+        let mut sink = self.sink.take().ok_or_else(|| anyhow::anyhow!("no sink"))?;
 
-    // Shared timers queue
-    let shared_timers = SharedTimers::default();
+        // Shared timers queue
+        let shared_timers = SharedTimers::default();
 
         // Source task
-    let mut sctx = ExecCtx { tx: tx.clone(), kv: kv.clone(), timers: timers.clone() };
-    let src_handle = tokio::spawn(async move { source.run(&mut sctx).await });
-    // Drop our local sender so the channel closes once the source finishes (its clone will drop then)
-    drop(tx);
+        let mut sctx = ExecCtx {
+            tx: tx.clone(),
+            kv: kv.clone(),
+            timers: timers.clone(),
+        };
+        let src_handle = tokio::spawn(async move { source.run(&mut sctx).await });
+        // Drop our local sender so the channel closes once the source finishes (its clone will drop then)
+        drop(tx);
 
         // Operator chain processing task
         let op_handle = tokio::spawn(async move {
@@ -258,7 +297,11 @@ impl Executor {
             }
             #[async_trait::async_trait]
             impl Timers for LocalTimers {
-                async fn register_event_time_timer(&self, when: EventTime, key: Option<Vec<u8>>) -> Result<()> {
+                async fn register_event_time_timer(
+                    &self,
+                    when: EventTime,
+                    key: Option<Vec<u8>>,
+                ) -> Result<()> {
                     self.shared.add(self.op_idx, when, key);
                     Ok(())
                 }
@@ -272,10 +315,16 @@ impl Executor {
             }
             #[async_trait::async_trait]
             impl<'a> Context for LocalCtx<'a> {
-                fn collect(&mut self, record: Record) { self.out.push(record); }
+                fn collect(&mut self, record: Record) {
+                    self.out.push(record);
+                }
                 fn watermark(&mut self, _wm: Watermark) {}
-                fn kv(&self) -> Arc<dyn KvState> { self.kv.clone() }
-                fn timers(&self) -> Arc<dyn Timers> { self.timers.clone() }
+                fn kv(&self) -> Arc<dyn KvState> {
+                    self.kv.clone()
+                }
+                fn timers(&self) -> Arc<dyn Timers> {
+                    self.timers.clone()
+                }
             }
 
             while let Some(msg) = rx.recv().await {
@@ -285,35 +334,62 @@ impl Executor {
                         let mut batch = vec![rec];
                         for (i, op) in ops.iter_mut().enumerate() {
                             let mut next = Vec::new();
-                            let timers = Arc::new(LocalTimers { op_idx: i, shared: shared_timers.clone() });
+                            let timers = Arc::new(LocalTimers {
+                                op_idx: i,
+                                shared: shared_timers.clone(),
+                            });
                             for item in batch.drain(..) {
-                                let mut lctx = LocalCtx { out: &mut next, kv: kv.clone(), timers: timers.clone() };
+                                let mut lctx = LocalCtx {
+                                    out: &mut next,
+                                    kv: kv.clone(),
+                                    timers: timers.clone(),
+                                };
                                 op.on_element(&mut lctx, item).await?;
                             }
                             batch = next;
-                            if batch.is_empty() { break; }
+                            if batch.is_empty() {
+                                break;
+                            }
                         }
-                        for out in batch.into_iter() { sink.on_element(out).await?; }
+                        for out in batch.into_iter() {
+                            sink.on_element(out).await?;
+                        }
                     }
                     EventMsg::Wm(wm) => {
                         // Propagate watermark to operators in order, allowing them to emit
                         let mut emitted = Vec::new();
                         for (i, op) in ops.iter_mut().enumerate() {
-                            let timers = Arc::new(LocalTimers { op_idx: i, shared: shared_timers.clone() });
-                            let mut lctx = LocalCtx { out: &mut emitted, kv: kv.clone(), timers: timers.clone() };
+                            let timers = Arc::new(LocalTimers {
+                                op_idx: i,
+                                shared: shared_timers.clone(),
+                            });
+                            let mut lctx = LocalCtx {
+                                out: &mut emitted,
+                                kv: kv.clone(),
+                                timers: timers.clone(),
+                            };
                             op.on_watermark(&mut lctx, wm).await?;
                         }
                         // Fire any timers due at this watermark
                         let due = shared_timers.drain_due(wm.0);
                         for t in due.into_iter() {
                             if let Some(op) = ops.get_mut(t.op_idx) {
-                                let timers = Arc::new(LocalTimers { op_idx: t.op_idx, shared: shared_timers.clone() });
-                                let mut lctx = LocalCtx { out: &mut emitted, kv: kv.clone(), timers: timers.clone() };
+                                let timers = Arc::new(LocalTimers {
+                                    op_idx: t.op_idx,
+                                    shared: shared_timers.clone(),
+                                });
+                                let mut lctx = LocalCtx {
+                                    out: &mut emitted,
+                                    kv: kv.clone(),
+                                    timers: timers.clone(),
+                                };
                                 op.on_timer(&mut lctx, t.when, t.key.clone()).await?;
                             }
                         }
                         // Emit produced records to sink
-                        for out in emitted.into_iter() { sink.on_element(out).await?; }
+                        for out in emitted.into_iter() {
+                            sink.on_element(out).await?;
+                        }
                         // Inform sink about watermark
                         sink.on_watermark(wm).await?;
                     }
@@ -323,14 +399,18 @@ impl Executor {
         });
 
         // Await tasks
-        src_handle.await.map_err(|e| Error::Anyhow(anyhow::anyhow!(e)))??;
+        src_handle
+            .await
+            .map_err(|e| Error::Anyhow(anyhow::anyhow!(e)))??;
         op_handle.await.map_err(|e| Error::Anyhow(anyhow::anyhow!(e)))??;
         Ok(())
     }
 }
 
 pub mod prelude {
-    pub use super::{Context, EventTime, Executor, KvState, Operator, Record, Result, Sink, Source, Watermark};
+    pub use super::{
+        Context, EventTime, Executor, KvState, Operator, Record, Result, Sink, Source, Watermark,
+    };
 }
 
 #[cfg(test)]
@@ -341,7 +421,8 @@ mod tests {
     #[async_trait::async_trait]
     impl Source for TestSource {
         async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
-            ctx.collect(Record::from_value(serde_json::json!({"n":1}))); Ok(())
+            ctx.collect(Record::from_value(serde_json::json!({"n":1})));
+            Ok(())
         }
     }
 
@@ -350,21 +431,27 @@ mod tests {
     impl Operator for TestOp {
         async fn on_element(&mut self, ctx: &mut dyn Context, mut record: Record) -> Result<()> {
             record.value["n"] = serde_json::json!(record.value["n"].as_i64().unwrap() + 1);
-            ctx.collect(record); Ok(())
+            ctx.collect(record);
+            Ok(())
         }
     }
 
     struct TestSink(pub std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>);
     #[async_trait::async_trait]
     impl Sink for TestSink {
-        async fn on_element(&mut self, record: Record) -> Result<()> { self.0.lock().unwrap().push(record.value); Ok(()) }
+        async fn on_element(&mut self, record: Record) -> Result<()> {
+            self.0.lock().unwrap().push(record.value);
+            Ok(())
+        }
     }
 
     #[tokio::test]
     async fn executor_wires_stages() {
         let mut exec = Executor::new();
         let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        exec.source(TestSource).operator(TestOp).sink(TestSink(out.clone()));
+        exec.source(TestSource)
+            .operator(TestOp)
+            .sink(TestSink(out.clone()));
         exec.run().await.unwrap();
         let got = out.lock().unwrap().clone();
         assert_eq!(got.len(), 1);

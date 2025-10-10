@@ -3,16 +3,29 @@
 //! - FileSink: writes JSONL (stdout or file)
 
 use async_trait::async_trait;
-use pulse_core::{Context, Record, Result, Source, Sink, EventTime};
+use pulse_core::{Context, EventTime, Record, Result, Sink, Source};
 use tokio::io::AsyncBufReadExt;
 
 #[derive(Clone)]
-pub enum FileFormat { Jsonl, Csv }
+pub enum FileFormat {
+    Jsonl,
+    Csv,
+}
 
-pub struct FileSource { pub path: String, pub format: FileFormat, pub event_time_field: String, pub text_field: Option<String> }
+pub struct FileSource {
+    pub path: String,
+    pub format: FileFormat,
+    pub event_time_field: String,
+    pub text_field: Option<String>,
+}
 impl FileSource {
     pub fn jsonl(path: impl Into<String>, event_time_field: impl Into<String>) -> Self {
-        Self { path: path.into(), format: FileFormat::Jsonl, event_time_field: event_time_field.into(), text_field: None }
+        Self {
+            path: path.into(),
+            format: FileFormat::Jsonl,
+            event_time_field: event_time_field.into(),
+            text_field: None,
+        }
     }
 }
 
@@ -24,7 +37,10 @@ impl Source for FileSource {
                 let mut lines = tokio::io::BufReader::new(tokio::fs::File::open(&self.path).await?).lines();
                 while let Some(line) = lines.next_line().await? {
                     let v: serde_json::Value = serde_json::from_str(&line)?;
-                    let ts = v.get(&self.event_time_field).cloned().unwrap_or(serde_json::Value::Null);
+                    let ts = v
+                        .get(&self.event_time_field)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
                     let ts = match ts {
                         serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) as i128 * 1_000_000, // assume ms, convert to ns
                         serde_json::Value::String(s) => {
@@ -35,21 +51,36 @@ impl Source for FileSource {
                         }
                         _ => 0,
                     };
-                    ctx.collect(Record { event_time: EventTime(ts), value: v });
+                    ctx.collect(Record {
+                        event_time: EventTime(ts),
+                        value: v,
+                    });
                 }
             }
             FileFormat::Csv => {
                 let file = tokio::fs::read_to_string(&self.path).await?;
-                let mut rdr = csv::ReaderBuilder::new().has_headers(true).from_reader(file.as_bytes());
+                let mut rdr = csv::ReaderBuilder::new()
+                    .has_headers(true)
+                    .from_reader(file.as_bytes());
                 let headers = rdr.headers()?.clone();
                 for row in rdr.records() {
                     let row = row?;
                     // build json object
                     let mut obj = serde_json::Map::new();
-                    for (h, v) in headers.iter().zip(row.iter()) { obj.insert(h.to_string(), serde_json::json!(v)); }
+                    for (h, v) in headers.iter().zip(row.iter()) {
+                        obj.insert(h.to_string(), serde_json::json!(v));
+                    }
                     let v = serde_json::Value::Object(obj);
-                    let ts = v.get(&self.event_time_field).and_then(|x| x.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0) as i128 * 1_000_000;
-                    ctx.collect(Record { event_time: EventTime(ts), value: v });
+                    let ts = v
+                        .get(&self.event_time_field)
+                        .and_then(|x| x.as_str())
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .unwrap_or(0) as i128
+                        * 1_000_000;
+                    ctx.collect(Record {
+                        event_time: EventTime(ts),
+                        value: v,
+                    });
                 }
             }
         }
@@ -57,8 +88,14 @@ impl Source for FileSource {
     }
 }
 
-pub struct FileSink { pub path: Option<String> }
-impl FileSink { pub fn stdout() -> Self { Self { path: None } } }
+pub struct FileSink {
+    pub path: Option<String>,
+}
+impl FileSink {
+    pub fn stdout() -> Self {
+        Self { path: None }
+    }
+}
 
 #[async_trait]
 impl Sink for FileSink {
@@ -66,10 +103,16 @@ impl Sink for FileSink {
         let line = serde_json::to_string(&record.value)?;
         if let Some(p) = &self.path {
             use tokio::io::AsyncWriteExt;
-            let mut f = tokio::fs::OpenOptions::new().create(true).append(true).open(p).await?;
+            let mut f = tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .await?;
             f.write_all(line.as_bytes()).await?;
             f.write_all(b"\n").await?;
-        } else { println!("{}", line); }
+        } else {
+            println!("{}", line);
+        }
         Ok(())
     }
 }
@@ -93,8 +136,18 @@ mod kafka {
     }
 
     impl KafkaSource {
-        pub fn new(brokers: impl Into<String>, group_id: impl Into<String>, topic: impl Into<String>, event_time_field: impl Into<String>) -> Self {
-            Self { brokers: brokers.into(), group_id: group_id.into(), topic: topic.into(), event_time_field: event_time_field.into() }
+        pub fn new(
+            brokers: impl Into<String>,
+            group_id: impl Into<String>,
+            topic: impl Into<String>,
+            event_time_field: impl Into<String>,
+        ) -> Self {
+            Self {
+                brokers: brokers.into(),
+                group_id: group_id.into(),
+                topic: topic.into(),
+                event_time_field: event_time_field.into(),
+            }
         }
     }
 
@@ -110,7 +163,9 @@ mod kafka {
                 .create()
                 .context("failed to create kafka consumer")?;
 
-            consumer.subscribe(&[&self.topic]).context("failed to subscribe to topic")?;
+            consumer
+                .subscribe(&[&self.topic])
+                .context("failed to subscribe to topic")?;
 
             let mut stream = consumer.stream();
             while let Some(ev) = stream.next().await {
@@ -118,16 +173,31 @@ mod kafka {
                     Ok(m) => {
                         if let Some(payload) = m.payload_view::<str>() {
                             let payload = payload.unwrap_or("");
-                            if payload.is_empty() { continue; }
-                            let v: serde_json::Value = match serde_json::from_str(payload) { Ok(v) => v, Err(_) => continue };
-                            let ts_v = v.get(&self.event_time_field).cloned().unwrap_or(serde_json::Value::Null);
+                            if payload.is_empty() {
+                                continue;
+                            }
+                            let v: serde_json::Value = match serde_json::from_str(payload) {
+                                Ok(v) => v,
+                                Err(_) => continue,
+                            };
+                            let ts_v = v
+                                .get(&self.event_time_field)
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
                             let ts = match ts_v {
                                 serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) as i128 * 1_000_000,
-                                serde_json::Value::String(s) => time::OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
-                                    .map(|t| t.unix_timestamp_nanos()).unwrap_or(0),
+                                serde_json::Value::String(s) => time::OffsetDateTime::parse(
+                                    &s,
+                                    &time::format_description::well_known::Rfc3339,
+                                )
+                                .map(|t| t.unix_timestamp_nanos())
+                                .unwrap_or(0),
                                 _ => 0,
                             };
-                            ctx.collect(Record { event_time: EventTime(ts), value: v });
+                            ctx.collect(Record {
+                                event_time: EventTime(ts),
+                                value: v,
+                            });
                         }
                     }
                     Err(_e) => {
@@ -148,7 +218,11 @@ mod kafka {
 
     impl KafkaSink {
         pub fn new(brokers: impl Into<String>, topic: impl Into<String>) -> Self {
-            Self { brokers: brokers.into(), topic: topic.into(), key_field: None }
+            Self {
+                brokers: brokers.into(),
+                topic: topic.into(),
+                key_field: None,
+            }
         }
         pub fn with_key_field(mut self, key_field: impl Into<String>) -> Self {
             self.key_field = Some(key_field.into());
@@ -165,10 +239,18 @@ mod kafka {
                 .context("failed to create kafka producer")?;
 
             let payload = serde_json::to_string(&record.value)?;
-            let key = self.key_field.as_ref().and_then(|k| record.value.get(k).and_then(|v| v.as_str()).map(|s| s.to_string()));
+            let key = self.key_field.as_ref().and_then(|k| {
+                record
+                    .value
+                    .get(k)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
 
             let mut fr = FutureRecord::to(&self.topic).payload(&payload);
-            if let Some(k) = key.as_deref() { fr = fr.key(k); }
+            if let Some(k) = key.as_deref() {
+                fr = fr.key(k);
+            }
 
             let _ = producer.send(fr, std::time::Duration::from_secs(0)).await;
             Ok(())
@@ -188,15 +270,23 @@ mod tests {
     struct TestState;
     #[async_trait]
     impl KvState for TestState {
-        async fn get(&self, _key: &[u8]) -> Result<Option<Vec<u8>>> { Ok(None) }
-        async fn put(&self, _key: &[u8], _value: Vec<u8>) -> Result<()> { Ok(()) }
-        async fn delete(&self, _key: &[u8]) -> Result<()> { Ok(()) }
+        async fn get(&self, _key: &[u8]) -> Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
+        async fn put(&self, _key: &[u8], _value: Vec<u8>) -> Result<()> {
+            Ok(())
+        }
+        async fn delete(&self, _key: &[u8]) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct TestTimers;
     #[async_trait]
     impl Timers for TestTimers {
-        async fn register_event_time_timer(&self, _when: EventTime, _key: Option<Vec<u8>>) -> Result<()> { Ok(()) }
+        async fn register_event_time_timer(&self, _when: EventTime, _key: Option<Vec<u8>>) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct TestCtx {
@@ -207,15 +297,24 @@ mod tests {
 
     #[async_trait]
     impl Context for TestCtx {
-        fn collect(&mut self, record: Record) { self.out.push(record); }
+        fn collect(&mut self, record: Record) {
+            self.out.push(record);
+        }
         fn watermark(&mut self, _wm: Watermark) {}
-        fn kv(&self) -> Arc<dyn KvState> { self.kv.clone() }
-        fn timers(&self) -> Arc<dyn Timers> { self.timers.clone() }
+        fn kv(&self) -> Arc<dyn KvState> {
+            self.kv.clone()
+        }
+        fn timers(&self) -> Arc<dyn Timers> {
+            self.timers.clone()
+        }
     }
 
     fn tmp_file(name: &str) -> String {
         let mut p = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         p.push(format!("pulse_test_{}_{}.tmp", name, nanos));
         p.to_string_lossy().to_string()
     }
@@ -227,7 +326,11 @@ mod tests {
         tokio::fs::write(&path, content).await.unwrap();
 
         let mut src = FileSource::jsonl(&path, "event_time");
-        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        let mut ctx = TestCtx {
+            out: vec![],
+            kv: Arc::new(TestState),
+            timers: Arc::new(TestTimers),
+        };
         src.run(&mut ctx).await.unwrap();
         assert_eq!(ctx.out.len(), 2);
         assert_eq!(ctx.out[0].value["text"], serde_json::json!("hello"));
@@ -242,8 +345,17 @@ mod tests {
         let csv_data = "event_time,text\n1704067200000,hello\n1704067260000,world\n";
         tokio::fs::write(&path, csv_data).await.unwrap();
 
-        let mut src = FileSource { path: path.clone(), format: FileFormat::Csv, event_time_field: "event_time".into(), text_field: None };
-        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        let mut src = FileSource {
+            path: path.clone(),
+            format: FileFormat::Csv,
+            event_time_field: "event_time".into(),
+            text_field: None,
+        };
+        let mut ctx = TestCtx {
+            out: vec![],
+            kv: Arc::new(TestState),
+            timers: Arc::new(TestTimers),
+        };
         src.run(&mut ctx).await.unwrap();
         assert_eq!(ctx.out.len(), 2);
         assert_eq!(ctx.out[0].value["text"], serde_json::json!("hello"));
@@ -254,9 +366,21 @@ mod tests {
     #[tokio::test]
     async fn file_sink_appends_to_file() {
         let path = tmp_file("sink");
-        let mut sink = FileSink { path: Some(path.clone()) };
-        sink.on_element(Record { event_time: EventTime::now(), value: serde_json::json!({"a":1}) }).await.unwrap();
-        sink.on_element(Record { event_time: EventTime::now(), value: serde_json::json!({"b":2}) }).await.unwrap();
+        let mut sink = FileSink {
+            path: Some(path.clone()),
+        };
+        sink.on_element(Record {
+            event_time: EventTime::now(),
+            value: serde_json::json!({"a":1}),
+        })
+        .await
+        .unwrap();
+        sink.on_element(Record {
+            event_time: EventTime::now(),
+            value: serde_json::json!({"b":2}),
+        })
+        .await
+        .unwrap();
 
         let data = tokio::fs::read_to_string(&path).await.unwrap();
         let lines: Vec<_> = data.lines().collect();
