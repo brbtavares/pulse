@@ -1,6 +1,9 @@
-# Basic clippy configuration
-warns = [
-    "clippy::await_holding_lock",
-    "clippy::cargo_common_metadata",
-    "clippy::dbg_macro",
-]
+# Clippy configuration
+# See: https://doc.rust-lang.org/clippy/lint_configuration.html
+
+# Minimum supported Rust version (keeps some lints compatible)
+msrv = "1.75"
+
+# Note: clippy.toml does not support listing lints to warn/deny.
+# Use command-line flags (e.g., `cargo clippy -- -W clippy::dbg_macro`)
+# or crate attributes (e.g., `#![warn(clippy::dbg_macro)]`) in source files.
