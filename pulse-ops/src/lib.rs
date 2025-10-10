@@ -125,3 +125,76 @@ impl Operator for Aggregate {
 pub mod prelude {
     pub use super::{Aggregate, AggregationKind, Filter, FnFilter, FnMap, KeyBy, Map, WindowTumbling};
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pulse_core::{Context, EventTime, KvState, Record, Result, Timers};
+    use std::sync::Arc;
+
+    struct TestState;
+    #[async_trait]
+    impl KvState for TestState {
+        async fn get(&self, _key: &[u8]) -> Result<Option<Vec<u8>>> { Ok(None) }
+        async fn put(&self, _key: &[u8], _value: Vec<u8>) -> Result<()> { Ok(()) }
+        async fn delete(&self, _key: &[u8]) -> Result<()> { Ok(()) }
+    }
+
+    struct TestTimers;
+    #[async_trait]
+    impl Timers for TestTimers {
+        async fn register_event_time_timer(&self, _when: EventTime, _key: Option<Vec<u8>>) -> Result<()> { Ok(()) }
+    }
+
+    struct TestCtx {
+        out: Vec<Record>,
+        kv: Arc<dyn KvState>,
+        timers: Arc<dyn Timers>,
+    }
+
+    #[async_trait]
+    impl Context for TestCtx {
+        fn collect(&mut self, record: Record) { self.out.push(record); }
+        fn watermark(&mut self, _wm: pulse_core::Watermark) {}
+        fn kv(&self) -> Arc<dyn KvState> { self.kv.clone() }
+        fn timers(&self) -> Arc<dyn Timers> { self.timers.clone() }
+    }
+
+    fn rec(v: serde_json::Value) -> Record { Record { event_time: EventTime::now(), value: v } }
+
+    #[tokio::test]
+    async fn test_map() {
+        let mut op = Map::new(MapFn::new(|v| vec![v]));
+        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        op.on_element(&mut ctx, rec(serde_json::json!({"a":1}))).await.unwrap();
+        assert_eq!(ctx.out.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_filter() {
+    let mut op = Filter::new(FilterFn::new(|v: &serde_json::Value| v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false)));
+        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        op.on_element(&mut ctx, rec(serde_json::json!({"ok":false}))).await.unwrap();
+        op.on_element(&mut ctx, rec(serde_json::json!({"ok":true}))).await.unwrap();
+        assert_eq!(ctx.out.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_keyby() {
+        let mut op = KeyBy::new("word");
+        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        op.on_element(&mut ctx, rec(serde_json::json!({"word":"hi"}))).await.unwrap();
+        assert_eq!(ctx.out.len(), 1);
+        assert_eq!(ctx.out[0].value["key"], serde_json::json!("hi"));
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_count() {
+        let mut op = Aggregate::count_per_window("key", "word");
+        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        op.on_element(&mut ctx, rec(serde_json::json!({"key":"hello"}))).await.unwrap();
+        op.on_element(&mut ctx, rec(serde_json::json!({"key":"hello"}))).await.unwrap();
+        assert_eq!(ctx.out.len(), 2);
+        assert_eq!(ctx.out[1].value["count"], serde_json::json!(2));
+    }
+}

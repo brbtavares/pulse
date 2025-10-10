@@ -7,13 +7,13 @@
 //!
 //! Quick example:
 //! ```no_run
-//! use pulse_core::{Context, Source, Sink, Operator, Record};
+//! use pulse_core::{Context, Source, Sink, Operator, Record, Result};
 //! # #[tokio::main]
-//! # async fn main() -> anyhow::Result<()> {
+//! # async fn main() -> Result<()> {
 //! struct MySource;
 //! #[async_trait::async_trait]
 //! impl Source for MySource {
-//!     async fn run(&mut self, ctx: &mut dyn Context) -> anyhow::Result<()> {
+//!     async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
 //!         ctx.collect(Record::from_value("hello"));
 //!         Ok(())
 //!     }
@@ -22,13 +22,13 @@
 //! struct MyOp;
 //! #[async_trait::async_trait]
 //! impl Operator for MyOp {
-//!     async fn on_element(&mut self, _ctx: &mut dyn Context, _rec: Record) -> anyhow::Result<()> { Ok(()) }
+//!     async fn on_element(&mut self, _ctx: &mut dyn Context, _rec: Record) -> Result<()> { Ok(()) }
 //! }
 //! 
 //! struct MySink;
 //! #[async_trait::async_trait]
 //! impl Sink for MySink {
-//!     async fn on_element(&mut self, _rec: Record) -> anyhow::Result<()> { Ok(()) }
+//!     async fn on_element(&mut self, _rec: Record) -> Result<()> { Ok(()) }
 //! }
 //! 
 //! let mut exec = pulse_core::Executor::new();
@@ -261,4 +261,43 @@ impl Executor {
 
 pub mod prelude {
     pub use super::{Context, EventTime, Executor, KvState, Operator, Record, Result, Sink, Source, Watermark};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestSource;
+    #[async_trait::async_trait]
+    impl Source for TestSource {
+        async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
+            ctx.collect(Record::from_value(serde_json::json!({"n":1}))); Ok(())
+        }
+    }
+
+    struct TestOp;
+    #[async_trait::async_trait]
+    impl Operator for TestOp {
+        async fn on_element(&mut self, ctx: &mut dyn Context, mut record: Record) -> Result<()> {
+            record.value["n"] = serde_json::json!(record.value["n"].as_i64().unwrap() + 1);
+            ctx.collect(record); Ok(())
+        }
+    }
+
+    struct TestSink(pub std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>);
+    #[async_trait::async_trait]
+    impl Sink for TestSink {
+        async fn on_element(&mut self, record: Record) -> Result<()> { self.0.lock().unwrap().push(record.value); Ok(()) }
+    }
+
+    #[tokio::test]
+    async fn executor_wires_stages() {
+        let mut exec = Executor::new();
+        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        exec.source(TestSource).operator(TestOp).sink(TestSink(out.clone()));
+        exec.run().await.unwrap();
+        let got = out.lock().unwrap().clone();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["n"], serde_json::json!(2));
+    }
 }

@@ -73,3 +73,92 @@ impl Sink for FileSink {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pulse_core::{Context, EventTime, KvState, Record, Result, Timers, Watermark};
+    use std::sync::Arc;
+
+    struct TestState;
+    #[async_trait]
+    impl KvState for TestState {
+        async fn get(&self, _key: &[u8]) -> Result<Option<Vec<u8>>> { Ok(None) }
+        async fn put(&self, _key: &[u8], _value: Vec<u8>) -> Result<()> { Ok(()) }
+        async fn delete(&self, _key: &[u8]) -> Result<()> { Ok(()) }
+    }
+
+    struct TestTimers;
+    #[async_trait]
+    impl Timers for TestTimers {
+        async fn register_event_time_timer(&self, _when: EventTime, _key: Option<Vec<u8>>) -> Result<()> { Ok(()) }
+    }
+
+    struct TestCtx {
+        pub out: Vec<Record>,
+        kv: Arc<dyn KvState>,
+        timers: Arc<dyn Timers>,
+    }
+
+    #[async_trait]
+    impl Context for TestCtx {
+        fn collect(&mut self, record: Record) { self.out.push(record); }
+        fn watermark(&mut self, _wm: Watermark) {}
+        fn kv(&self) -> Arc<dyn KvState> { self.kv.clone() }
+        fn timers(&self) -> Arc<dyn Timers> { self.timers.clone() }
+    }
+
+    fn tmp_file(name: &str) -> String {
+        let mut p = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        p.push(format!("pulse_test_{}_{}.tmp", name, nanos));
+        p.to_string_lossy().to_string()
+    }
+
+    #[tokio::test]
+    async fn file_source_jsonl_reads_lines() {
+        let path = tmp_file("jsonl");
+        let content = "{\"event_time\":1704067200000,\"text\":\"hello\"}\n{\"event_time\":\"2024-01-01T00:00:00Z\",\"text\":\"world\"}\n";
+        tokio::fs::write(&path, content).await.unwrap();
+
+        let mut src = FileSource::jsonl(&path, "event_time");
+        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        src.run(&mut ctx).await.unwrap();
+        assert_eq!(ctx.out.len(), 2);
+        assert_eq!(ctx.out[0].value["text"], serde_json::json!("hello"));
+        assert_eq!(ctx.out[1].value["text"], serde_json::json!("world"));
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn file_source_csv_reads_rows() {
+        let path = tmp_file("csv");
+        let csv_data = "event_time,text\n1704067200000,hello\n1704067260000,world\n";
+        tokio::fs::write(&path, csv_data).await.unwrap();
+
+        let mut src = FileSource { path: path.clone(), format: FileFormat::Csv, event_time_field: "event_time".into(), text_field: None };
+        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        src.run(&mut ctx).await.unwrap();
+        assert_eq!(ctx.out.len(), 2);
+        assert_eq!(ctx.out[0].value["text"], serde_json::json!("hello"));
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn file_sink_appends_to_file() {
+        let path = tmp_file("sink");
+        let mut sink = FileSink { path: Some(path.clone()) };
+        sink.on_element(Record { event_time: EventTime::now(), value: serde_json::json!({"a":1}) }).await.unwrap();
+        sink.on_element(Record { event_time: EventTime::now(), value: serde_json::json!({"b":2}) }).await.unwrap();
+
+        let data = tokio::fs::read_to_string(&path).await.unwrap();
+        let lines: Vec<_> = data.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("\"a\":1"));
+        assert!(lines[1].contains("\"b\":2"));
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+}

@@ -36,3 +36,19 @@ pub mod rocks {
         async fn delete(&self, key: &[u8]) -> Result<()> { self.db.delete(key)?; Ok(()) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn in_memory_state_put_get_delete() {
+        let state = InMemoryState::default();
+        let key = b"k1";
+        assert!(state.get(key).await.unwrap().is_none());
+        state.put(key, b"v1".to_vec()).await.unwrap();
+        assert_eq!(state.get(key).await.unwrap().unwrap(), b"v1".to_vec());
+        state.delete(key).await.unwrap();
+        assert!(state.get(key).await.unwrap().is_none());
+    }
+}
