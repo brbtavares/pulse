@@ -246,7 +246,8 @@ impl Executor {
         // Source task
     let mut sctx = ExecCtx { tx: tx.clone(), kv: kv.clone(), timers: timers.clone() };
     let src_handle = tokio::spawn(async move { source.run(&mut sctx).await });
-    // We'll keep tx alive to allow operator/sink emissions; loop ends when both source is done and channel closes.
+    // Drop our local sender so the channel closes once the source finishes (its clone will drop then)
+    drop(tx);
 
         // Operator chain processing task
         let op_handle = tokio::spawn(async move {
@@ -303,7 +304,7 @@ impl Executor {
                             op.on_watermark(&mut lctx, wm).await?;
                         }
                         // Fire any timers due at this watermark
-                        let due = shared_timers.drain_due(wm.0.into());
+                        let due = shared_timers.drain_due(wm.0);
                         for t in due.into_iter() {
                             if let Some(op) = ops.get_mut(t.op_idx) {
                                 let timers = Arc::new(LocalTimers { op_idx: t.op_idx, shared: shared_timers.clone() });
