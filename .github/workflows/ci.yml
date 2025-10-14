@@ -54,5 +54,11 @@ jobs:
         with:
           cache-on-failure: true
 
+      # Regenerate a lockfile compatible with Cargo 1.75 to avoid parse errors
+      - name: Generate MSRV-compatible lockfile
+        run: |
+          rm -f Cargo.lock
+          cargo generate-lockfile
+
       - name: build (no features)
         run: cargo build --workspace --all-targets
