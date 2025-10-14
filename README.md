@@ -1,5 +1,8 @@
 # Pulse
 
+[![CI](https://github.com/brbtavares/pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/brbtavares/pulse/actions/workflows/ci.yml)
+[![Release](https://github.com/brbtavares/pulse/actions/workflows/release.yml/badge.svg)](https://github.com/brbtavares/pulse/actions/workflows/release.yml)
+
 A tiny real-time streaming framework (Flink/Beam-like) written in Rust.
 
 Goals:

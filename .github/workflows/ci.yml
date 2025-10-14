@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check:
+    name: Lint, build and test (stable)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: rustfmt (non-blocking)
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+
+      - name: clippy (warnings allowed)
+        run: cargo clippy --all-targets
+        continue-on-error: true
+
+      - name: build
+        run: cargo build --workspace --all-targets
+
+      - name: test
+        run: cargo test --workspace
+
+  msrv:
+    name: MSRV info (1.75) — no build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (1.75)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.75.0
+
+      - name: Toolchain info
+        run: |
+          rustc --version
+          cargo --version
+      - name: Resolve metadata (no build)
+        run: cargo metadata --format-version=1 --no-deps
