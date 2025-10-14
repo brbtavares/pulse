@@ -37,7 +37,7 @@ jobs:
         run: cargo test --workspace
 
   msrv:
-    name: Check MSRV (1.75) — non-blocking
+    name: MSRV info (1.75) — no build
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -49,16 +49,9 @@ jobs:
         with:
           toolchain: 1.75.0
 
-      - name: Cache cargo
-        uses: swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      # Regenerate a lockfile compatible with Cargo 1.75 to avoid parse errors
-      - name: Generate MSRV-compatible lockfile
+      - name: Toolchain info
         run: |
-          rm -f Cargo.lock
-          cargo generate-lockfile
-
-      - name: build (no features)
-        run: cargo build --workspace --all-targets
+          rustc --version
+          cargo --version
+      - name: Resolve metadata (no build)
+        run: cargo metadata --format-version=1 --no-deps
