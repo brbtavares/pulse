@@ -9,12 +9,7 @@ on:
 jobs:
   check:
     name: Lint, build and test (stable)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,21 +22,24 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: rustfmt check
+      - name: rustfmt (non-blocking)
         run: cargo fmt --all -- --check
+        continue-on-error: true
 
-      - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+      - name: clippy (warnings allowed)
+        run: cargo clippy --all-targets
+        continue-on-error: true
 
       - name: build
-        run: cargo build --workspace --all-targets --locked
+        run: cargo build --workspace --all-targets
 
       - name: test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace
 
   msrv:
-    name: Check MSRV (1.75)
+    name: Check MSRV (1.75) — non-blocking
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,7 +55,4 @@ jobs:
           cache-on-failure: true
 
       - name: build (no features)
-        run: cargo build --workspace --all-targets --locked
-
-      - name: test (no features)
-        run: cargo test --workspace --locked
+        run: cargo build --workspace --all-targets

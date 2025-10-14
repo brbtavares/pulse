@@ -7,13 +7,8 @@ on:
 
 jobs:
   build:
-    name: Build example binary
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+    name: Build example binary (Linux)
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,18 +22,10 @@ jobs:
           cache-on-failure: true
 
       - name: Build pulse-examples
-        run: cargo build -p pulse-examples --release --locked
+        run: cargo build -p pulse-examples --release
 
-      - name: Upload artifact (Linux)
-        if: runner.os == 'Linux'
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pulse-examples-${{ runner.os }}
+          name: pulse-examples-linux
           path: target/release/pulse-examples
-
-      - name: Upload artifact (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pulse-examples-${{ runner.os }}
-          path: target\release\pulse-examples.exe
