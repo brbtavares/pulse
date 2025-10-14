@@ -200,12 +200,6 @@ pub struct Executor {
     timers: Arc<dyn Timers>,
 }
 
-impl Default for Executor { 
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Executor {
     /// Create a new empty executor.
     pub fn new() -> Self {
