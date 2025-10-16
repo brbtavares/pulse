@@ -16,3 +16,7 @@ format:
 # Lint with clippy and treat warnings as errors
 clippy:
     cargo clippy --all-targets -- --deny warnings
+
+# Generate documentation
+docs:
+    cargo doc --open --workspace --no-deps
