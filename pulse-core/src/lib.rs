@@ -30,13 +30,14 @@
 //! struct MySink;
 //! #[async_trait::async_trait]
 //! impl Sink for MySink {
-//!     async fn on_element(&mut self, _rec: Record) -> Result<()> { Ok(()) }
-//! }
+//!     async fn on_element(&mut self, _rec: Record) -> Result<()> {
+//!         Ok(())
+//!     }
 //!
-//! let mut exec = pulse_core::Executor::new();
-//! exec.source(MySource).operator(MyOp).sink(MySink);
-//! exec.run().await?;
-//! # Ok(()) }
+//!     let mut exec = pulse_core::Executor::new();
+//!     exec.source(MySource).operator(MyOp).sink(MySink);
+//!     exec.run().await?;
+//!     Ok(())
 //! ```
 
 use std::sync::Arc;
