@@ -8,14 +8,16 @@
 //! Quick example:
 //! ```no_run
 //! use pulse_core::{Context, Source, Sink, Operator, Record, Result};
-//! # #[tokio::main]
-//! # async fn main() -> Result<()> {
-//! struct MySource;
-//! #[async_trait::async_trait]
-//! impl Source for MySource {
-//!     async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
-//!         ctx.collect(Record::from_value("hello"));
-//!         Ok(())
+//! 
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     struct MySource;
+//!     #[async_trait::async_trait]
+//!     impl Source for MySource {
+//!         async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
+//!             ctx.collect(Record::from_value("hello"));
+//!             Ok(())
+//!         }
 //!     }
 //! }
 //!
