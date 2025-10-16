@@ -7,35 +7,40 @@
 //!
 //! Quick example:
 //! ```no_run
-//! use pulse_core::{Context, Source, Sink, Operator, Record, Result};
-//! 
-//! #[tokio::main]
-//! async fn main() -> Result<()> {
-//!     struct MySource;
-//!     #[async_trait::async_trait]
-//!     impl Source for MySource {
-//!         async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
-//!             ctx.collect(Record::from_value("hello"));
-//!             Ok(())
-//!         }
+//! use async_trait::async_trait;
+//! use pulse_core::prelude::*;
+//!
+//! struct MySource;
+//! #[async_trait]
+//! impl Source for MySource {
+//!     async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
+//!         ctx.collect(Record::from_value("hello"));
+//!         Ok(())
 //!     }
-//!     Ok(())
 //! }
 //!
 //! struct MyOp;
-//! #[async_trait::async_trait]
+//! #[async_trait]
 //! impl Operator for MyOp {
-//!     async fn on_element(&mut self, _ctx: &mut dyn Context, _rec: Record) -> Result<()> { Ok(()) }
+//!     async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
+//!         // pass-through
+//!         ctx.collect(rec);
+//!         Ok(())
+//!     }
 //! }
 //!
 //! struct MySink;
-//! #[async_trait::async_trait]
+//! #[async_trait]
 //! impl Sink for MySink {
-//!     async fn on_element(&mut self, _rec: Record) -> Result<()> {
+//!     async fn on_element(&mut self, rec: Record) -> Result<()> {
+//!         println!("{}", rec.value);
 //!         Ok(())
 //!     }
+//! }
 //!
-//!     let mut exec = pulse_core::Executor::new();
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     let mut exec = Executor::new();
 //!     exec.source(MySource).operator(MyOp).sink(MySink);
 //!     exec.run().await?;
 //!     Ok(())
