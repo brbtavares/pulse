@@ -38,6 +38,7 @@
 //!     exec.source(MySource).operator(MyOp).sink(MySink);
 //!     exec.run().await?;
 //!     Ok(())
+//! }
 //! ```
 
 use std::sync::Arc;
