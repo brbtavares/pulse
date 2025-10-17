@@ -38,6 +38,7 @@ impl Source for FileSource {
         match self.format {
             FileFormat::Jsonl => {
                 let mut lines = tokio::io::BufReader::new(tokio::fs::File::open(&self.path).await?).lines();
+                let mut max_ts: i128 = i128::MIN;
                 while let Some(line) = lines.next_line().await? {
                     let v: serde_json::Value = serde_json::from_str(&line)?;
                     let ts = v
@@ -54,14 +55,19 @@ impl Source for FileSource {
                         }
                         _ => 0,
                     };
+                    if ts > max_ts { max_ts = ts; }
                     ctx.collect(Record {
                         event_time: EventTime(ts),
                         value: v,
                     });
                 }
+                if max_ts != i128::MIN {
+                    ctx.watermark(pulse_core::Watermark(EventTime(max_ts)));
+                }
             }
             FileFormat::Csv => {
                 let file = tokio::fs::read_to_string(&self.path).await?;
+                let mut max_ts: i128 = i128::MIN;
                 let mut rdr = csv::ReaderBuilder::new()
                     .has_headers(true)
                     .from_reader(file.as_bytes());
@@ -80,10 +86,14 @@ impl Source for FileSource {
                         .and_then(|s| s.parse::<i64>().ok())
                         .unwrap_or(0) as i128
                         * 1_000_000;
+                    if ts > max_ts { max_ts = ts; }
                     ctx.collect(Record {
                         event_time: EventTime(ts),
                         value: v,
                     });
+                }
+                if max_ts != i128::MIN {
+                    ctx.watermark(pulse_core::Watermark(EventTime(max_ts)));
                 }
             }
         }
