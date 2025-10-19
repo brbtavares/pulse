@@ -132,6 +132,12 @@ impl ParquetSink {
         }
         Ok(())
     }
+
+    fn close_active(&mut self) {
+        if let Some(active) = self.active.take() {
+            let _ = active.writer.close();
+        }
+    }
 }
 
 #[async_trait]
@@ -158,6 +164,18 @@ impl Sink for ParquetSink {
             active.rows += 1;
         }
         Ok(())
+    }
+
+    async fn on_watermark(&mut self, _wm: pulse_core::Watermark) -> Result<()> {
+        // Finalize any open file so readers can see a valid footer
+        self.close_active();
+        Ok(())
+    }
+}
+
+impl Drop for ParquetSink {
+    fn drop(&mut self) {
+        self.close_active();
     }
 }
 
