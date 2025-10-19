@@ -1592,6 +1592,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "async-trait",
+ "base64",
  "chrono",
  "csv",
  "futures",

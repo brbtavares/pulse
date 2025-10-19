@@ -6,6 +6,17 @@ pub struct SourceConfig {
     pub kind: String,           // "file"
     pub path: PathBuf,          // path to file
     pub time_field: String,     // e.g., "event_time" or "ts"
+    // Kafka-specific (used when kind=="kafka")
+    #[serde(default)]
+    pub bootstrap_servers: Option<String>,
+    #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(default)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub auto_offset_reset: Option<String>, // "earliest" | "latest"
+    #[serde(default)]
+    pub commit_interval_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -32,8 +43,16 @@ pub struct OpsConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SinkConfig {
-    pub kind: String,     // "parquet" | "file"
+    pub kind: String,     // "parquet" | "file" | "kafka"
+    #[serde(default)]
     pub out_dir: PathBuf, // for parquet or file path for file sink
+    // Kafka-specific (when kind=="kafka")
+    #[serde(default)]
+    pub bootstrap_servers: Option<String>,
+    #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(default)]
+    pub acks: Option<String>, // "all" | "1" | "0"
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -47,11 +66,36 @@ pub struct PipelineConfig {
 
 impl PipelineConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.source.kind.as_str() != "file" {
-            anyhow::bail!("unsupported source kind: {}", self.source.kind);
+        match self.source.kind.as_str() {
+            "file" => {
+                if self.source.path.as_os_str().is_empty() {
+                    anyhow::bail!("source.path must be set for file source");
+                }
+            }
+            "kafka" => {
+                if self.source.bootstrap_servers.as_deref().unwrap_or("").is_empty() {
+                    anyhow::bail!("source.bootstrap_servers must be set for kafka source");
+                }
+                if self.source.topic.as_deref().unwrap_or("").is_empty() {
+                    anyhow::bail!("source.topic must be set for kafka source");
+                }
+                if self.source.group_id.as_deref().unwrap_or("").is_empty() {
+                    anyhow::bail!("source.group_id must be set for kafka source");
+                }
+            }
+            other => anyhow::bail!("unsupported source kind: {}", other),
         }
-        if self.sink.kind.as_str() != "parquet" && self.sink.kind.as_str() != "file" {
-            anyhow::bail!("unsupported sink kind: {}", self.sink.kind);
+        match self.sink.kind.as_str() {
+            "parquet" | "file" => {}
+            "kafka" => {
+                if self.sink.bootstrap_servers.as_deref().unwrap_or("").is_empty() {
+                    anyhow::bail!("sink.bootstrap_servers must be set for kafka sink");
+                }
+                if self.sink.topic.as_deref().unwrap_or("").is_empty() {
+                    anyhow::bail!("sink.topic must be set for kafka sink");
+                }
+            }
+            other => anyhow::bail!("unsupported sink kind: {}", other),
         }
         if self.ops.count_by.is_none() {
             anyhow::bail!("ops.count_by must be set (e.g., word field)");

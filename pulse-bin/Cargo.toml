@@ -17,6 +17,10 @@ pulse-ops = { path = "../pulse-ops" }
 pulse-io = { path = "../pulse-io", features = ["parquet"] }
 anyhow = { workspace = true }
 
+[features]
+default = []
+kafka = ["pulse-io/kafka"]
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 axum = { workspace = true }

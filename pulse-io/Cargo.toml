@@ -9,7 +9,7 @@ license = "MIT"
 # Optional integrations. Enable per-crate via `--features` or in dependent crates.
 arrow = ["dep:arrow"]
 parquet = ["dep:parquet", "arrow"]
-kafka = ["dep:rdkafka", "dep:futures"]
+kafka = ["dep:rdkafka", "dep:futures", "dep:base64"]
 
 [dependencies]
 pulse-core = { path = "../pulse-core" }
@@ -26,3 +26,4 @@ parquet = { version = "53", optional = true }
 # Use rdkafka with tokio integration; avoid compiling unless feature is enabled.
 rdkafka = { version = "0.36", optional = true, default-features = false, features = ["tokio", "cmake-build"] }
 futures = { version = "0.3", optional = true }
+base64 = { version = "0.22", optional = true }

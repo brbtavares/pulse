@@ -62,7 +62,24 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
     let allowed_lateness_ms = pulse_core::config::parse_duration_ms(&cfg.time.allowed_lateness)?;
     let win_size_ms = pulse_core::config::parse_duration_ms(&cfg.window.size)?;
 
-    let src = pulse_io::FileSource::jsonl(cfg.source.path.to_string_lossy(), cfg.source.time_field);
+    // Build source based on kind
+    #[allow(unused_mut)]
+    let src: Box<dyn pulse_core::Source> = match cfg.source.kind.as_str() {
+        "file" => Box::new(pulse_io::FileSource::jsonl(cfg.source.path.to_string_lossy(), cfg.source.time_field.clone())),
+    #[cfg(feature = "kafka")]
+        "kafka" => {
+            let mut s = pulse_io::KafkaSource::new(
+                cfg.source.bootstrap_servers.clone().unwrap(),
+                cfg.source.group_id.clone().unwrap(),
+                cfg.source.topic.clone().unwrap(),
+                cfg.source.time_field.clone(),
+            );
+            s.auto_offset_reset = cfg.source.auto_offset_reset.clone();
+            if let Some(ms) = cfg.source.commit_interval_ms { s.commit_interval = std::time::Duration::from_millis(ms); }
+            Box::new(s)
+        }
+        other => return Err(anyhow::anyhow!(format!("unsupported source kind: {}", other))),
+    };
 
     let mut exec = pulse_core::Executor::new();
     exec.source(src)
@@ -77,6 +94,15 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
                     max_age: std::time::Duration::from_secs(300),
                 });
                 ps
+            }
+            #[cfg(feature = "kafka")]
+            "kafka" => {
+                let mut ks = pulse_io::KafkaSink::new(
+                    cfg.sink.bootstrap_servers.clone().unwrap(),
+                    cfg.sink.topic.clone().unwrap(),
+                );
+                ks.acks = cfg.sink.acks.clone();
+                ks
             }
             _ => {
                 // default to FileSink stdout for now

@@ -145,16 +145,44 @@ mod kafka {
     use super::*;
     use anyhow::Context as AnyhowContext;
     use futures::StreamExt;
-    use rdkafka::consumer::{Consumer, StreamConsumer};
-    use rdkafka::message::Message;
+    use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
+    use rdkafka::message::{BorrowedMessage, Message};
     use rdkafka::producer::{FutureProducer, FutureRecord};
     use rdkafka::ClientConfig;
+
+    const CP_NS: &[u8] = b"kafka:offset:"; // namespace for checkpoint offset per topic-partition
+
+    fn extract_event_time(v: &serde_json::Value, field: &str) -> chrono::DateTime<chrono::Utc> {
+        match v.get(field).cloned().unwrap_or(serde_json::Value::Null) {
+            serde_json::Value::Number(n) => chrono::DateTime::<chrono::Utc>::from_timestamp_millis(n.as_i64().unwrap_or(0)).unwrap_or_else(|| chrono::Utc.timestamp_millis_opt(0).unwrap()),
+            serde_json::Value::String(s) => chrono::DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&chrono::Utc)).unwrap_or_else(|_| chrono::Utc.timestamp_millis_opt(0).unwrap()),
+            _ => chrono::Utc.timestamp_millis_opt(0).unwrap(),
+        }
+    }
+
+    fn msg_to_value(m: &BorrowedMessage) -> Option<serde_json::Value> {
+        if let Some(payload) = m.payload() {
+            // Try UTF-8 -> JSON; fallback to base64 string
+            if let Ok(s) = std::str::from_utf8(payload) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+                    return Some(v);
+                }
+                return Some(serde_json::json!({"bytes": s}));
+            } else {
+                return Some(serde_json::json!({"bytes_b64": base64::encode(payload)}));
+            }
+        }
+        None
+    }
 
     pub struct KafkaSource {
         pub brokers: String,
         pub group_id: String,
         pub topic: String,
         pub event_time_field: String,
+        pub auto_offset_reset: Option<String>,
+        pub commit_interval: std::time::Duration,
+        current_offset: Option<String>,
     }
 
     impl KafkaSource {
@@ -169,19 +197,35 @@ mod kafka {
                 group_id: group_id.into(),
                 topic: topic.into(),
                 event_time_field: event_time_field.into(),
+                auto_offset_reset: None,
+                commit_interval: std::time::Duration::from_secs(5),
+                current_offset: None,
             }
+        }
+
+        fn cp_key(&self, partition: i32) -> Vec<u8> {
+            let mut k = CP_NS.to_vec();
+            k.extend_from_slice(self.topic.as_bytes());
+            k.push(b':');
+            k.extend_from_slice(self.group_id.as_bytes());
+            k.push(b':');
+            k.extend_from_slice(partition.to_string().as_bytes());
+            k
         }
     }
 
     #[async_trait]
     impl Source for KafkaSource {
         async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
-            let consumer: StreamConsumer = ClientConfig::new()
-                .set("bootstrap.servers", &self.brokers)
+            let mut cfg = ClientConfig::new();
+            cfg.set("bootstrap.servers", &self.brokers)
                 .set("group.id", &self.group_id)
                 .set("enable.partition.eof", "false")
-                .set("session.timeout.ms", "6000")
-                .set("enable.auto.commit", "true")
+                .set("enable.auto.commit", "false")
+                .set("session.timeout.ms", "10000");
+            if let Some(r) = &self.auto_offset_reset { cfg.set("auto.offset.reset", r); }
+
+            let consumer: StreamConsumer = cfg
                 .create()
                 .context("failed to create kafka consumer")?;
 
@@ -189,41 +233,37 @@ mod kafka {
                 .subscribe(&[&self.topic])
                 .context("failed to subscribe to topic")?;
 
+            let mut last_commit = std::time::Instant::now();
             let mut stream = consumer.stream();
             while let Some(ev) = stream.next().await {
                 match ev {
                     Ok(m) => {
-                        if let Some(payload) = m.payload_view::<str>() {
-                            let payload = payload.unwrap_or("");
-                            if payload.is_empty() {
-                                continue;
+                        if let Some(mut v) = msg_to_value(&m) {
+                            let ts = extract_event_time(&v, &self.event_time_field);
+                            // attach topic/partition/offset for debugging
+                            if let Some(obj) = v.as_object_mut() {
+                                obj.insert("_topic".into(), serde_json::json!(m.topic()));
+                                obj.insert("_partition".into(), serde_json::json!(m.partition()));
+                                obj.insert("_offset".into(), serde_json::json!(m.offset()));
                             }
-                            let v: serde_json::Value = match serde_json::from_str(payload) {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            let ts_v = v
-                                .get(&self.event_time_field)
-                                .cloned()
-                                .unwrap_or(serde_json::Value::Null);
-                            let ts = match ts_v {
-                                serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) as i128 * 1_000_000,
-                                serde_json::Value::String(s) => time::OffsetDateTime::parse(
-                                    &s,
-                                    &time::format_description::well_known::Rfc3339,
-                                )
-                                .map(|t| t.unix_timestamp_nanos())
-                                .unwrap_or(0),
-                                _ => 0,
-                            };
-                            ctx.collect(Record {
-                                event_time: EventTime(ts),
-                                value: v,
-                            });
+                            ctx.collect(Record { event_time: ts, value: v });
+
+                            // Track current offset and persist periodically for checkpoints
+                            let part = m.partition();
+                            let off = m.offset();
+                            self.current_offset = Some(format!("{}@{}", part, off));
+                            if last_commit.elapsed() >= self.commit_interval {
+                                // Commit to Kafka and persist to KvState for recovery
+                                let _ = consumer.commit_message(&m, CommitMode::Async);
+                                let key = self.cp_key(part);
+                                let _ = ctx.kv().put(&key, off.to_string().into_bytes()).await;
+                                last_commit = std::time::Instant::now();
+                            }
                         }
                     }
-                    Err(_e) => {
-                        // For now, skip errors to keep the source resilient.
+                    Err(_) => {
+                        // Backoff briefly on errors
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         continue;
                     }
                 }
@@ -235,46 +275,39 @@ mod kafka {
     pub struct KafkaSink {
         pub brokers: String,
         pub topic: String,
+        pub acks: Option<String>,
         pub key_field: Option<String>,
+        producer: Option<FutureProducer>,
     }
 
     impl KafkaSink {
         pub fn new(brokers: impl Into<String>, topic: impl Into<String>) -> Self {
-            Self {
-                brokers: brokers.into(),
-                topic: topic.into(),
-                key_field: None,
-            }
+            Self { brokers: brokers.into(), topic: topic.into(), acks: Some("all".into()), key_field: None, producer: None }
         }
-        pub fn with_key_field(mut self, key_field: impl Into<String>) -> Self {
-            self.key_field = Some(key_field.into());
-            self
+        pub fn with_key_field(mut self, key_field: impl Into<String>) -> Self { self.key_field = Some(key_field.into()); self }
+        fn ensure_producer(&mut self) -> anyhow::Result<()> {
+            if self.producer.is_none() {
+                let mut cfg = ClientConfig::new();
+                cfg.set("bootstrap.servers", &self.brokers);
+                if let Some(a) = &self.acks { cfg.set("acks", a); }
+                self.producer = Some(cfg.create().context("failed to create kafka producer")?);
+            }
+            Ok(())
         }
     }
 
     #[async_trait]
     impl Sink for KafkaSink {
         async fn on_element(&mut self, record: Record) -> Result<()> {
-            let producer: FutureProducer = ClientConfig::new()
-                .set("bootstrap.servers", &self.brokers)
-                .create()
-                .context("failed to create kafka producer")?;
-
+            self.ensure_producer().map_err(|e| Error::Anyhow(e.into()))?;
+            let producer = self.producer.as_ref().unwrap();
             let payload = serde_json::to_string(&record.value)?;
-            let key = self.key_field.as_ref().and_then(|k| {
-                record
-                    .value
-                    .get(k)
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            });
-
+            let key = self.key_field.as_ref().and_then(|k| record.value.get(k).and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .unwrap_or_default();
+            // Respect backpressure by awaiting the send future; mirrors ParquetSink's per-record write
             let mut fr = FutureRecord::to(&self.topic).payload(&payload);
-            if let Some(k) = key.as_deref() {
-                fr = fr.key(k);
-            }
-
-            let _ = producer.send(fr, std::time::Duration::from_secs(0)).await;
+            if !key.is_empty() { fr = fr.key(&key); }
+            let _ = producer.send(fr, std::time::Duration::from_secs(5)).await;
             Ok(())
         }
     }

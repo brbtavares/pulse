@@ -127,6 +127,17 @@ pub trait Source: Send {
     async fn run(&mut self, ctx: &mut dyn Context) -> Result<()>;
 }
 
+// Allow using boxed trait objects as sources seamlessly.
+#[async_trait::async_trait]
+impl<T> Source for Box<T>
+where
+    T: Source + ?Sized,
+{
+    async fn run(&mut self, ctx: &mut dyn Context) -> Result<()> {
+        (**self).run(ctx).await
+    }
+}
+
 /// Core operator interface. Override `on_watermark`/`on_timer` if needed.
 #[async_trait::async_trait]
 pub trait Operator: Send {
