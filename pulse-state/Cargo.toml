@@ -6,7 +6,7 @@ edition = "2021"
 license = "MIT"
 description = "State management utilities for Pulse — provides windowing, aggregations, and persistent operator state."
 repository = "https://github.com/brbtavares/pulse"
-readme = "README.md"
+readme = "../README.md"
 
 [features]
 rocksdb = ["dep:rocksdb"]
