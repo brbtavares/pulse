@@ -3,7 +3,10 @@ name = "pulse-bin"
 version = "0.1.0"
 authors = ["Pulse Contributors"]
 edition = "2021"
-license = "MIT"
+license.workspace = true
+repository.workspace = true
+description = "Command-line binary for running Pulse dataflow pipelines."
+publish = false
 
 [dependencies]
 axum = { workspace = true }

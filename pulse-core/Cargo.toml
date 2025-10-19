@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["Pulse Contributors"]
 edition = "2021"
 license = "MIT"
+description = "Core runtime and dataflow engine for Pulse — defines execution graph, operators, and streaming primitives."
+repository = "https://github.com/brbtavares/pulse"
+readme = "README.md"
+publish = false
 
 [features]
 rocksdb = ["dep:rocksdb"]

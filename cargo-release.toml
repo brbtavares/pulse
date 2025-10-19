@@ -1,0 +1,9 @@
+# .cargo-release.toml
+shared-version = false
+allow-branch = ["main"]
+dependent-version = "upgrade"
+push = false
+tag = false
+publish = true
+release = false
+workspace = true

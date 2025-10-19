@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["Pulse Contributors"]
 edition = "2021"
 license = "MIT"
+description = "Built-in operators and combinators for Pulse dataflows — map, filter, join, window, and custom processing logic."
+repository = "https://github.com/brbtavares/pulse"
+readme = "README.md"
 
 [dependencies]
 pulse-core = { path = "../pulse-core" }

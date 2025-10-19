@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["Pulse Contributors"]
 edition = "2021"
 license = "MIT"
+description = "Input/output connectors for Pulse — integrates with external systems such as Kafka, Arrow, and Parquet."
+repository = "https://github.com/brbtavares/pulse"
+readme = "README.md"
 
 [features]
 # Optional integrations. Enable per-crate via `--features` or in dependent crates.
