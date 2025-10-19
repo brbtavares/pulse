@@ -278,6 +278,11 @@ mod kafka {
 #[cfg(feature = "kafka")]
 pub use kafka::{KafkaSink, KafkaSource};
 
+#[cfg(feature = "parquet")]
+pub mod parquet_sink;
+#[cfg(feature = "parquet")]
+pub use parquet_sink::{ParquetSink, ParquetSinkConfig, PartitionSpec};
+
 #[cfg(test)]
 mod tests {
     use super::*;

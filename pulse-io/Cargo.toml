@@ -8,7 +8,7 @@ license = "MIT"
 [features]
 # Optional integrations. Enable per-crate via `--features` or in dependent crates.
 arrow = ["dep:arrow"]
-parquet = ["dep:parquet"]
+parquet = ["dep:parquet", "arrow"]
 kafka = ["dep:rdkafka", "dep:futures"]
 
 [dependencies]
