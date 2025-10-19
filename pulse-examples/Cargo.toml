@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["Pulse Contributors"]
 edition = "2021"
 license = "MIT"
+publish = false
+description = "Example dataflow pipelines demonstrating Pulse capabilities and integrations."
 
 [dependencies]
 pulse-core = { path = "../pulse-core" }
