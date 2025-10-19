@@ -58,6 +58,7 @@ pub use checkpoint::{CheckpointMeta, SnapshotId};
 
 pub mod record;
 pub use record::Record;
+pub mod metrics;
 
 /// Logical event-time as wall-clock timestamp in UTC.
 /// Use [`EventTime::now`] for current time.
@@ -173,10 +174,14 @@ impl KvState for SimpleInMemoryState {
     }
     async fn put(&self, key: &[u8], value: Vec<u8>) -> Result<()> {
         self.0.lock().map.insert(key.to_vec(), value);
+        let sz = self.0.lock().map.len() as i64;
+        metrics::STATE_SIZE.with_label_values(&["SimpleInMemoryState"]).set(sz);
         Ok(())
     }
     async fn delete(&self, key: &[u8]) -> Result<()> {
         self.0.lock().map.remove(key);
+        let sz = self.0.lock().map.len() as i64;
+        metrics::STATE_SIZE.with_label_values(&["SimpleInMemoryState"]).set(sz);
         Ok(())
     }
     async fn iter_prefix(&self, prefix: Option<&[u8]>) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
@@ -415,6 +420,10 @@ impl Executor {
                     EventMsg::Wm(wm) => {
                         // Propagate watermark to operators in order, allowing them to emit
                         let mut emitted = Vec::new();
+                        // Update lag metric: now - watermark
+                        let now = chrono::Utc::now();
+                        let lag = (now - wm.0 .0).num_milliseconds();
+                        metrics::LAG_WATERMARK_MS.set(lag as i64);
                         for (i, op) in ops.iter_mut().enumerate() {
                             let timers = Arc::new(LocalTimers {
                                 op_idx: i,

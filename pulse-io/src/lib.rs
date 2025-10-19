@@ -127,6 +127,7 @@ impl Sink for FileSink {
                 .await?;
             f.write_all(line.as_bytes()).await?;
             f.write_all(b"\n").await?;
+            pulse_core::metrics::BYTES_WRITTEN.with_label_values(&["FileSink"]).inc_by((line.len() + 1) as u64);
         } else {
             println!("{}", line);
         }

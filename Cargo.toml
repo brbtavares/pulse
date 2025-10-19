@@ -5,6 +5,7 @@ members = [
 	"pulse-state",
 	"pulse-io",
 	"pulse-examples",
+    "pulse-bin",
 ]
 resolver = "2"
 
@@ -24,6 +25,13 @@ anyhow = "1.0"
 thiserror = "1.0"
 time = { version = "0.3", features = ["parsing", "formatting", "macros"] }
 parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+prometheus = "0.13"
+axum = { version = "0.7", features = ["http1", "tokio"] }
+
+# (no root crate dependencies; this is a virtual workspace manifest)
+once_cell = "1.19"
 
 [profile.release]
 codegen-units = 1

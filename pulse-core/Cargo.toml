@@ -26,3 +26,5 @@ rocksdb = { version = "0.21", optional = true }
 arrow = { version = "53", optional = true }
 parquet = { version = "53", optional = true }
 rdkafka = { version = "0.36", optional = true }
+prometheus = { workspace = true }
+once_cell = { workspace = true }

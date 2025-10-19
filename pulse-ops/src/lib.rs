@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use tracing::{instrument, info_span};
 use pulse_core::{Context, EventTime, Operator, Record, Result, Watermark};
 use chrono::{TimeZone, Utc};
 pub mod time;
@@ -61,13 +62,16 @@ impl<F> Operator for Map<F>
 where
     F: FnMap + Send + Sync + 'static,
 {
+    #[instrument(name = "map_on_element", skip_all)]
     async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
         let outs = self.func.call(rec.value).await?;
+        pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["Map", "receive"]).inc();
         for v in outs {
             ctx.collect(Record {
                 event_time: rec.event_time,
                 value: v.clone(),
             });
+            pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["Map", "emit"]).inc();
         }
         Ok(())
     }
@@ -116,9 +120,12 @@ impl<F> Operator for Filter<F>
 where
     F: FnFilter + Send + Sync + 'static,
 {
+    #[instrument(name = "filter_on_element", skip_all)]
     async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
+        pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["Filter", "receive"]).inc();
         if self.pred.call(&rec.value).await? {
             ctx.collect(rec);
+            pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["Filter", "emit"]).inc();
         }
         Ok(())
     }
@@ -143,7 +150,9 @@ impl KeyBy {
 
 #[async_trait]
 impl Operator for KeyBy {
+    #[instrument(name = "keyby_on_element", skip_all)]
     async fn on_element(&mut self, ctx: &mut dyn Context, mut rec: Record) -> Result<()> {
+        pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["KeyBy", "receive"]).inc();
         let key = rec
             .value
             .get(&self.field)
@@ -156,6 +165,7 @@ impl Operator for KeyBy {
         obj.insert("key".to_string(), key);
         rec.value = serde_json::Value::Object(obj);
         ctx.collect(rec);
+        pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["KeyBy", "emit"]).inc();
         Ok(())
     }
 }

@@ -1,0 +1,18 @@
+[package]
+name = "pulse-bin"
+version = "0.1.0"
+authors = ["Pulse Contributors"]
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+axum = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+pulse-core = { path = "../pulse-core" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+axum = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
