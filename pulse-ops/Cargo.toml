@@ -1,15 +1,15 @@
 [package]
 name = "pulse-ops"
 version = "0.1.0"
-authors = ["Pulse Contributors"]
-edition = "2021"
-license = "MIT"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Built-in operators and combinators for Pulse dataflows — map, filter, join, window, and custom processing logic."
-repository = "https://github.com/brbtavares/pulse"
-readme = "../README.md"
+repository.workspace = true
+readme.workspace = true
 
 [dependencies]
-pulse-core = { path = "../pulse-core" }
+pulse-core  = { version = "0.1.0", path = "../pulse-core" }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
@@ -20,4 +20,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-pulse-state = { path = "../pulse-state" }
+pulse-state = { version = "0.1.0", path = "../pulse-state" }

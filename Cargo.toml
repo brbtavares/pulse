@@ -13,6 +13,7 @@ resolver = "2"
 edition = "2021"
 license = "MIT"
 authors = ["Pulse Contributors"]
+email = "brbtavares@outlook.com"
 rust-version = "1.75"
 repository = "https://github.com/brbtavares/pulse"
 readme = "../README.md"
