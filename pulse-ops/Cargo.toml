@@ -20,4 +20,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-pulse-state = { version = "0.1.0", path = "../pulse-state" }
+pulse-state = { path = "../pulse-state" }
