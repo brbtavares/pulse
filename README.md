@@ -1,6 +1,7 @@
 # Pulse
 
 [![CI](https://github.com/brbtavares/pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/brbtavares/pulse/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/brbtavares/pulse/branch/main/graph/badge.svg)](https://codecov.io/gh/brbtavares/pulse)
 
 [![crates.io - pulse-core](https://img.shields.io/crates/v/pulse-core.svg)](https://crates.io/crates/pulse-core)
 [![docs.rs - pulse-core](https://img.shields.io/docsrs/pulse-core)](https://docs.rs/pulse-core)

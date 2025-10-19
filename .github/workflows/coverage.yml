@@ -1,0 +1,35 @@
+name: Coverage
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rust + llvm-tools (necessário p/ llvm-cov)
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      # Instala o cargo-llvm-cov (subcomando do cargo)
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      # (Opcional) cache do target para acelerar builds
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Gera cobertura em formato LCOV para o workspace inteiro
+      - name: Generate coverage (lcov)
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      # Sobe para o Codecov
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
