@@ -1538,6 +1538,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "parquet",
  "pulse-core",
  "pulse-io",
  "pulse-ops",

@@ -65,7 +65,10 @@ impl Source for FileSource {
                     });
                 }
                 if let Some(m) = max_ts {
-                    ctx.watermark(pulse_core::Watermark(EventTime(m)));
+                    // Emit an EOF watermark far in the future to flush downstream windows/timers.
+                    // Using +100 years as a practical "infinity" for batch sources.
+                    let eof_wm = m + chrono::Duration::days(365 * 100);
+                    ctx.watermark(pulse_core::Watermark(EventTime(eof_wm)));
                 }
             }
             FileFormat::Csv => {
@@ -96,7 +99,8 @@ impl Source for FileSource {
                     });
                 }
                 if let Some(m) = max_ts {
-                    ctx.watermark(pulse_core::Watermark(EventTime(m)));
+                    let eof_wm = m + chrono::Duration::days(365 * 100);
+                    ctx.watermark(pulse_core::Watermark(EventTime(eof_wm)));
                 }
             }
         }

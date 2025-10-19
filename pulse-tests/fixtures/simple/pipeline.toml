@@ -1,0 +1,18 @@
+[source]
+kind = "file"
+path = "pulse-tests/fixtures/simple/input.jsonl"
+time_field = "event_time"
+
+[time]
+allowed_lateness = "0s"
+
+[window]
+type = "tumbling"
+size = "60s"
+
+[ops]
+count_by = "word"
+
+[sink]
+kind = "parquet"
+out_dir = "pulse-tests/fixtures/simple/out"

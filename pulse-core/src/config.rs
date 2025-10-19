@@ -1,19 +1,19 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SourceConfig {
     pub kind: String,           // "file"
     pub path: PathBuf,          // path to file
     pub time_field: String,     // e.g., "event_time" or "ts"
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TimeConfig {
     pub allowed_lateness: String, // e.g., "10s"
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WindowConfig {
     #[serde(rename = "type")]
     pub kind: String, // tumbling|sliding|session
@@ -24,19 +24,19 @@ pub struct WindowConfig {
     pub gap: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct OpsConfig {
     #[serde(default)]
     pub count_by: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SinkConfig {
     pub kind: String,     // "parquet" | "file"
     pub out_dir: PathBuf, // for parquet or file path for file sink
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PipelineConfig {
     pub source: SourceConfig,
     pub time: TimeConfig,

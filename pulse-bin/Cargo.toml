@@ -21,3 +21,4 @@ anyhow = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 axum = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
+parquet = { version = "53" }

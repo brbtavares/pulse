@@ -62,7 +62,7 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
     let allowed_lateness_ms = pulse_core::config::parse_duration_ms(&cfg.time.allowed_lateness)?;
     let win_size_ms = pulse_core::config::parse_duration_ms(&cfg.window.size)?;
 
-    let mut src = pulse_io::FileSource::jsonl(cfg.source.path.to_string_lossy(), cfg.source.time_field);
+    let src = pulse_io::FileSource::jsonl(cfg.source.path.to_string_lossy(), cfg.source.time_field);
 
     let mut exec = pulse_core::Executor::new();
     exec.source(src)
@@ -94,6 +94,8 @@ mod tests {
     use axum::body::{self, Body};
     use axum::http::Request;
     use tower::util::ServiceExt;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use std::path::PathBuf;
 
     #[tokio::test]
     async fn metrics_endpoint_returns_text() {
@@ -108,5 +110,64 @@ mod tests {
     let body = body::to_bytes(res.into_body(), 1_048_576).await.unwrap();
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert!(text.contains("pulse_operator_records_total"));
+    }
+
+    fn remove_dir_all_quiet(p: &PathBuf) {
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[tokio::test]
+    async fn golden_simple_pipeline_parquet_rowcount() {
+        // Use the fixture pipeline and input; override out_dir to a unique temp folder to avoid pollution.
+        let mut cfg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        cfg_path.pop(); // go to workspace root from pulse-bin
+        let pipeline_toml = cfg_path.join("pulse-tests/fixtures/simple/pipeline.toml");
+        assert!(pipeline_toml.exists(), "fixture pipeline missing: {:?}", pipeline_toml);
+
+        // Read and modify out_dir to a temp dir
+    let text = tokio::fs::read_to_string(&pipeline_toml).await.unwrap();
+    let mut cfg: pulse_core::config::PipelineConfig = toml::from_str(&text).unwrap();
+    // Ensure source.path is absolute so it works regardless of test cwd
+    let abs_input = cfg_path.join("pulse-tests/fixtures/simple/input.jsonl");
+    cfg.source.path = abs_input;
+        let tmp_out = std::env::temp_dir().join(format!("pulse_golden_out_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        cfg.sink.out_dir = tmp_out.clone();
+        // Write a temp config file
+        let tmp_cfg = tmp_out.with_file_name("pipeline.temp.toml");
+        if let Some(parent) = tmp_cfg.parent() { let _ = std::fs::create_dir_all(parent); }
+        tokio::fs::write(&tmp_cfg, toml::to_string(&cfg).unwrap()).await.unwrap();
+
+        // Ensure clean output dir
+        remove_dir_all_quiet(&tmp_out);
+
+        // Run pipeline
+        run_pipeline(tmp_cfg.clone()).await.unwrap();
+
+        // Scan parquet files and count rows
+        let mut total_rows = 0usize;
+        if let Ok(rd) = std::fs::read_dir(&tmp_out) {
+            for part in rd.flatten() {
+                if part.path().is_dir() {
+                    for file in std::fs::read_dir(part.path()).unwrap().flatten() {
+                        let p = file.path();
+                        if p.extension().map(|e| e == "parquet").unwrap_or(false) {
+                            let f = std::fs::File::open(&p).unwrap();
+                            let builder = ParquetRecordBatchReaderBuilder::try_new(f).unwrap();
+                            let mut reader = builder.build().unwrap();
+                            while let Some(batch) = reader.next() {
+                                total_rows += batch.unwrap().num_rows();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // For the fixture input of 3 events within the same 60s window for keys a,a,b,
+        // WordCount tumbling count should emit 2 rows (keys a and b) when flushed by EOF watermark.
+        assert_eq!(total_rows, 2, "unexpected parquet total rows");
+
+        // Cleanup
+        remove_dir_all_quiet(&tmp_out);
     }
 }
