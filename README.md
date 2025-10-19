@@ -1,7 +1,19 @@
 # Pulse
 
 [![CI](https://github.com/brbtavares/pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/brbtavares/pulse/actions/workflows/ci.yml)
-[![Release](https://github.com/brbtavares/pulse/actions/workflows/release.yml/badge.svg)](https://github.com/brbtavares/pulse/actions/workflows/release.yml)
+
+[![crates.io - pulse-core](https://img.shields.io/crates/v/pulse-core.svg)](https://crates.io/crates/pulse-core)
+[![docs.rs - pulse-core](https://img.shields.io/docsrs/pulse-core)](https://docs.rs/pulse-core)
+
+[![crates.io - pulse-state](https://img.shields.io/crates/v/pulse-state.svg)](https://crates.io/crates/pulse-state)
+[![docs.rs - pulse-state](https://img.shields.io/docsrs/pulse-state)](https://docs.rs/pulse-state)
+
+[![crates.io - pulse-ops](https://img.shields.io/crates/v/pulse-ops.svg)](https://crates.io/crates/pulse-ops)
+[![docs.rs - pulse-ops](https://img.shields.io/docsrs/pulse-ops)](https://docs.rs/pulse-ops)
+
+[![crates.io - pulse-io](https://img.shields.io/crates/v/pulse-io.svg)](https://crates.io/crates/pulse-io)
+[![docs.rs - pulse-io](https://img.shields.io/docsrs/pulse-io)](https://docs.rs/pulse-io)
+
 
 Pulse is a tiny, modular, event-time streaming framework (Flink/Beam-like) written in Rust. It focuses on clarity, testability, and a local-first workflow. It supports watermarks, windowing, pluggable state, Prometheus metrics, and a single-binary CLI that runs pipelines from a TOML file.
 
