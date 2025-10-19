@@ -53,6 +53,9 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 
+pub mod checkpoint;
+pub use checkpoint::{CheckpointMeta, SnapshotId};
+
 pub mod record;
 pub use record::Record;
 
@@ -93,6 +96,12 @@ pub trait KvState: Send + Sync {
     async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
     async fn put(&self, key: &[u8], value: Vec<u8>) -> Result<()>;
     async fn delete(&self, key: &[u8]) -> Result<()>;
+    /// Returns all key/value pairs, optionally filtered by a prefix.
+    async fn iter_prefix(&self, prefix: Option<&[u8]>) -> Result<Vec<(Vec<u8>, Vec<u8>)>>;
+    /// Creates a point-in-time snapshot of the current state and returns its id.
+    async fn snapshot(&self) -> Result<SnapshotId>;
+    /// Restores the state to a previously created snapshot id.
+    async fn restore(&self, snapshot: SnapshotId) -> Result<()>;
 }
 
 /// Timer service for event-time callbacks requested by operators.
@@ -145,6 +154,7 @@ pub trait Sink: Send {
 #[derive(Default)]
 struct SimpleStateInner {
     map: std::collections::HashMap<Vec<u8>, Vec<u8>>,
+    snapshots: std::collections::HashMap<SnapshotId, std::collections::HashMap<Vec<u8>, Vec<u8>>>,
 }
 
 #[derive(Clone)]
@@ -152,7 +162,7 @@ pub struct SimpleInMemoryState(Arc<Mutex<SimpleStateInner>>);
 
 impl Default for SimpleInMemoryState {
     fn default() -> Self {
-        Self(Arc::new(Mutex::new(SimpleStateInner::default())))
+        Self(Arc::new(Mutex::new(SimpleStateInner { map: Default::default(), snapshots: Default::default() })))
     }
 }
 
@@ -168,6 +178,39 @@ impl KvState for SimpleInMemoryState {
     async fn delete(&self, key: &[u8]) -> Result<()> {
         self.0.lock().map.remove(key);
         Ok(())
+    }
+    async fn iter_prefix(&self, prefix: Option<&[u8]>) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let guard = self.0.lock();
+        let mut v: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        if let Some(p) = prefix {
+            for (k, val) in guard.map.iter() {
+                if k.starts_with(p) {
+                    v.push((k.clone(), val.clone()));
+                }
+            }
+        } else {
+            v.extend(guard.map.iter().map(|(k, val)| (k.clone(), val.clone())));
+        }
+        Ok(v)
+    }
+    async fn snapshot(&self) -> Result<SnapshotId> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let mut guard = self.0.lock();
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        let id: SnapshotId = format!("mem-{}", ts);
+        let current = guard.map.clone();
+        guard.snapshots.insert(id.clone(), current);
+        Ok(id)
+    }
+    async fn restore(&self, snapshot: SnapshotId) -> Result<()> {
+        let mut guard = self.0.lock();
+        if let Some(m) = guard.snapshots.get(&snapshot) {
+            guard.map = m.clone();
+            Ok(())
+        } else {
+            // No-op if snapshot not found
+            Ok(())
+        }
     }
 }
 
@@ -424,6 +467,7 @@ impl Executor {
 pub mod prelude {
     pub use super::{
         Context, EventTime, Executor, KvState, Operator, Record, Result, Sink, Source, Watermark,
+        CheckpointMeta, SnapshotId,
     };
 }
 

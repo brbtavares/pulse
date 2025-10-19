@@ -765,6 +765,15 @@ mod window_tests {
         async fn delete(&self, _key: &[u8]) -> Result<()> {
             Ok(())
         }
+        async fn iter_prefix(&self, _prefix: Option<&[u8]>) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+            Ok(Vec::new())
+        }
+        async fn snapshot(&self) -> Result<pulse_core::SnapshotId> {
+            Ok("test-snap".to_string())
+        }
+        async fn restore(&self, _snapshot: pulse_core::SnapshotId) -> Result<()> {
+            Ok(())
+        }
     }
     struct TestTimers;
     #[async_trait]
@@ -834,6 +843,15 @@ mod tests {
             Ok(())
         }
         async fn delete(&self, _key: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        async fn iter_prefix(&self, _prefix: Option<&[u8]>) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+            Ok(Vec::new())
+        }
+        async fn snapshot(&self) -> Result<pulse_core::SnapshotId> {
+            Ok("test-snap".to_string())
+        }
+        async fn restore(&self, _snapshot: pulse_core::SnapshotId) -> Result<()> {
             Ok(())
         }
     }
