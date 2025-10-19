@@ -1,0 +1,21 @@
+# Minimal example pipeline
+[source]
+kind = "file"
+path = "pulse-examples/examples/sliding_avg.jsonl"
+time_field = "event_time"
+
+[time]
+allowed_lateness = "10s"
+
+[window]
+# tumbling, sliding or session (currently wired: tumbling)
+type = "tumbling"
+size = "60s"
+
+[ops]
+# list simplified to one aggregation form: count_by = "word"
+count_by = "word"
+
+[sink]
+kind = "parquet"
+out_dir = "outputs"

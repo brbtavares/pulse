@@ -59,6 +59,7 @@ pub use checkpoint::{CheckpointMeta, SnapshotId};
 pub mod record;
 pub use record::Record;
 pub mod metrics;
+pub mod config;
 
 /// Logical event-time as wall-clock timestamp in UTC.
 /// Use [`EventTime::now`] for current time.
