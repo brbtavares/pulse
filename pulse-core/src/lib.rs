@@ -51,40 +51,23 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
+use chrono::{DateTime, Utc};
 
-/// Logical event-time represented as Unix epoch nanoseconds.
-/// Use [`EventTime::now`] for wall-clock timestamps when needed.
+pub mod record;
+pub use record::Record;
+
+/// Logical event-time as wall-clock timestamp in UTC.
+/// Use [`EventTime::now`] for current time.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct EventTime(pub i128); // epoch nanos
+pub struct EventTime(pub DateTime<Utc>);
 
 impl EventTime {
     pub fn now() -> Self {
-        let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
-        EventTime(now)
+        EventTime(Utc::now())
     }
 }
 
-/// A data record flowing through the pipeline.
-/// - `event_time` drives windowing and watermark/timer semantics
-/// - `value` is an arbitrary JSON payload in this PoC
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Record {
-    pub event_time: EventTime,
-    pub value: serde_json::Value,
-}
-
-impl Record {
-    pub fn new(event_time: EventTime, value: serde_json::Value) -> Self {
-        Self { event_time, value }
-    }
-    pub fn from_value<V: Into<serde_json::Value>>(v: V) -> Self {
-        Self {
-            event_time: EventTime::now(),
-            value: v.into(),
-        }
-    }
-}
+// Record is defined in `record` module and re-exported above.
 
 /// A low-watermark indicating no future records <= this event-time are expected.
 #[derive(Debug, Clone, Copy)]

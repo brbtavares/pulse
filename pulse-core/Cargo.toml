@@ -20,6 +20,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 parking_lot = { workspace = true }
 time = { workspace = true }
+chrono = { version = "0.4", default-features = true, features = ["clock", "std", "serde"] }
 csv = { workspace = true }
 rocksdb = { version = "0.21", optional = true }
 arrow = { version = "53", optional = true }

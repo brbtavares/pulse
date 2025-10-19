@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use pulse_core::{Context, EventTime, Record, Result, Sink, Source};
+use chrono::{DateTime, Utc, TimeZone};
 use tokio::io::AsyncBufReadExt;
 
 #[derive(Clone)]
@@ -38,7 +39,7 @@ impl Source for FileSource {
         match self.format {
             FileFormat::Jsonl => {
                 let mut lines = tokio::io::BufReader::new(tokio::fs::File::open(&self.path).await?).lines();
-                let mut max_ts: i128 = i128::MIN;
+                let mut max_ts: Option<DateTime<Utc>> = None;
                 while let Some(line) = lines.next_line().await? {
                     let v: serde_json::Value = serde_json::from_str(&line)?;
                     let ts = v
@@ -46,28 +47,30 @@ impl Source for FileSource {
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
                     let ts = match ts {
-                        serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) as i128 * 1_000_000, // assume ms, convert to ns
-                        serde_json::Value::String(s) => {
-                            // try parse RFC3339
-                            time::OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
-                                .map(|t| t.unix_timestamp_nanos())
-                                .unwrap_or(0)
+                        serde_json::Value::Number(n) => {
+                            // assume ms epoch
+                            let ms = n.as_i64().unwrap_or(0);
+                            DateTime::<Utc>::from_timestamp_millis(ms).unwrap_or_else(|| Utc.timestamp_millis_opt(0).unwrap())
                         }
-                        _ => 0,
+                        serde_json::Value::String(s) => {
+                            // parse RFC3339
+                            DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).unwrap_or_else(|_| Utc.timestamp_millis_opt(0).unwrap())
+                        }
+                        _ => Utc.timestamp_millis_opt(0).unwrap(),
                     };
-                    if ts > max_ts { max_ts = ts; }
+                    max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                     ctx.collect(Record {
-                        event_time: EventTime(ts),
+                        event_time: ts,
                         value: v,
                     });
                 }
-                if max_ts != i128::MIN {
-                    ctx.watermark(pulse_core::Watermark(EventTime(max_ts)));
+                if let Some(m) = max_ts {
+                    ctx.watermark(pulse_core::Watermark(EventTime(m)));
                 }
             }
             FileFormat::Csv => {
                 let file = tokio::fs::read_to_string(&self.path).await?;
-                let mut max_ts: i128 = i128::MIN;
+                let mut max_ts: Option<DateTime<Utc>> = None;
                 let mut rdr = csv::ReaderBuilder::new()
                     .has_headers(true)
                     .from_reader(file.as_bytes());
@@ -84,16 +87,16 @@ impl Source for FileSource {
                         .get(&self.event_time_field)
                         .and_then(|x| x.as_str())
                         .and_then(|s| s.parse::<i64>().ok())
-                        .unwrap_or(0) as i128
-                        * 1_000_000;
-                    if ts > max_ts { max_ts = ts; }
+                        .and_then(|ms| DateTime::<Utc>::from_timestamp_millis(ms))
+                        .unwrap_or_else(|| Utc.timestamp_millis_opt(0).unwrap());
+                    max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
                     ctx.collect(Record {
-                        event_time: EventTime(ts),
+                        event_time: ts,
                         value: v,
                     });
                 }
-                if max_ts != i128::MIN {
-                    ctx.watermark(pulse_core::Watermark(EventTime(max_ts)));
+                if let Some(m) = max_ts {
+                    ctx.watermark(pulse_core::Watermark(EventTime(m)));
                 }
             }
         }
@@ -384,13 +387,13 @@ mod tests {
             path: Some(path.clone()),
         };
         sink.on_element(Record {
-            event_time: EventTime::now(),
+            event_time: chrono::Utc::now(),
             value: serde_json::json!({"a":1}),
         })
         .await
         .unwrap();
         sink.on_element(Record {
-            event_time: EventTime::now(),
+            event_time: chrono::Utc::now(),
             value: serde_json::json!({"b":2}),
         })
         .await

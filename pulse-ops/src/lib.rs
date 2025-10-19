@@ -11,6 +11,11 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use pulse_core::{Context, EventTime, Operator, Record, Result, Watermark};
+use chrono::{TimeZone, Utc};
+pub mod time;
+pub mod window;
+pub use time::{WatermarkClock, WatermarkPolicy};
+pub use window::{Window, WindowAssigner, WindowOperator};
 
 #[async_trait]
 pub trait FnMap: Send + Sync {
@@ -202,9 +207,8 @@ impl Aggregate {
 #[async_trait]
 impl Operator for Aggregate {
     async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
-        let ts = rec.event_time.0; // nanos
         let minute_ms = 60_000_i128;
-        let ts_ms = ts / 1_000_000; // to ms
+        let ts_ms = rec.event_time.timestamp_millis() as i128; // ms
         let win_start_ms = (ts_ms / minute_ms) * minute_ms;
         let key = rec
             .value
@@ -495,7 +499,7 @@ fn finalize_value(state: &AggState, agg: &AggKind) -> serde_json::Value {
 #[async_trait]
 impl Operator for WindowedAggregate {
     async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
-        let ts_ms = rec.event_time.0 / 1_000_000; // nanos -> ms
+        let ts_ms = rec.event_time.timestamp_millis() as i128; // ms
         let key = rec
             .value
             .get(&self.key_field)
@@ -514,7 +518,7 @@ impl Operator for WindowedAggregate {
                 // Optional: schedule a timer at end
                 let _ = ctx
                     .timers()
-                    .register_event_time_timer(pulse_core::EventTime(end * 1_000_000), None)
+                    .register_event_time_timer(pulse_core::EventTime(Utc.timestamp_millis_opt(end as i64).unwrap()), None)
                     .await;
             }
             WindowKind::Sliding { size_ms, slide_ms } => {
@@ -531,7 +535,7 @@ impl Operator for WindowedAggregate {
                         update_state(&mut entry.1, &self.agg, &rec.value);
                         let _ = ctx
                             .timers()
-                            .register_event_time_timer(pulse_core::EventTime(end * 1_000_000), None)
+                            .register_event_time_timer(pulse_core::EventTime(Utc.timestamp_millis_opt(end as i64).unwrap()), None)
                             .await;
                     }
                 }
@@ -583,7 +587,7 @@ impl Operator for WindowedAggregate {
                 let end = ts_ms + (gap_ms as i128);
                 let _ = ctx
                     .timers()
-                    .register_event_time_timer(pulse_core::EventTime(end * 1_000_000), None)
+                    .register_event_time_timer(pulse_core::EventTime(Utc.timestamp_millis_opt(end as i64).unwrap()), None)
                     .await;
             }
         }
@@ -591,7 +595,7 @@ impl Operator for WindowedAggregate {
     }
 
     async fn on_watermark(&mut self, ctx: &mut dyn Context, wm: Watermark) -> Result<()> {
-        let wm_ms = wm.0 .0 / 1_000_000;
+    let wm_ms = wm.0 .0.timestamp_millis() as i128;
 
         match self.win {
             WindowKind::Tumbling { .. } | WindowKind::Sliding { .. } => {
@@ -622,10 +626,7 @@ impl Operator for WindowedAggregate {
                             out.insert("distinct_count".into(), val);
                         }
                     }
-                    ctx.collect(Record {
-                        event_time: EventTime(wm.0 .0),
-                        value: serde_json::Value::Object(out),
-                    });
+                    ctx.collect(Record { event_time: wm.0 .0, value: serde_json::Value::Object(out) });
                     self.by_window.remove(&(end, key));
                 }
             }
@@ -657,10 +658,7 @@ impl Operator for WindowedAggregate {
                                     out.insert("distinct_count".into(), val);
                                 }
                             }
-                            ctx.collect(Record {
-                                event_time: EventTime(wm.0 .0),
-                                value: serde_json::Value::Object(out),
-                            });
+                            ctx.collect(Record { event_time: wm.0 .0, value: serde_json::Value::Object(out) });
                             self.sessions.remove(&key);
                         }
                     }
@@ -677,7 +675,7 @@ impl Operator for WindowedAggregate {
         _key: Option<Vec<u8>>,
     ) -> Result<()> {
         // Treat timers same as watermarks for emission, but only for windows ending at `when`.
-        let when_ms = when.0 / 1_000_000;
+        let when_ms = when.0.timestamp_millis() as i128;
 
         match self.win {
             WindowKind::Tumbling { .. } | WindowKind::Sliding { .. } => {
@@ -707,10 +705,7 @@ impl Operator for WindowedAggregate {
                             out.insert("distinct_count".into(), val);
                         }
                     }
-                    ctx.collect(Record {
-                        event_time: when,
-                        value: serde_json::Value::Object(out),
-                    });
+                    ctx.collect(Record { event_time: when.0, value: serde_json::Value::Object(out) });
                     self.by_window.remove(&(end, key));
                 }
             }
@@ -741,10 +736,7 @@ impl Operator for WindowedAggregate {
                                     out.insert("distinct_count".into(), val);
                                 }
                             }
-                            ctx.collect(Record {
-                                event_time: when,
-                                value: serde_json::Value::Object(out),
-                            });
+                            ctx.collect(Record { event_time: when.0, value: serde_json::Value::Object(out) });
                             self.sessions.remove(&key);
                         }
                     }
@@ -803,7 +795,7 @@ mod window_tests {
 
     fn record_with(ts_ms: i128, key: &str) -> Record {
         Record {
-            event_time: EventTime(ts_ms * 1_000_000),
+            event_time: Utc.timestamp_millis_opt(ts_ms as i64).unwrap(),
             value: serde_json::json!({"word": key}),
         }
     }
@@ -819,7 +811,7 @@ mod window_tests {
         op.on_element(&mut ctx, record_with(1_000, "a")).await.unwrap();
         op.on_element(&mut ctx, record_with(1_010, "a")).await.unwrap();
         // Watermark after end of window 0..60000
-        op.on_watermark(&mut ctx, Watermark(EventTime(60_000 * 1_000_000)))
+        op.on_watermark(&mut ctx, Watermark(EventTime(Utc.timestamp_millis_opt(60_000).unwrap())))
             .await
             .unwrap();
         assert_eq!(ctx.out.len(), 1);
@@ -876,7 +868,7 @@ mod tests {
 
     fn rec(v: serde_json::Value) -> Record {
         Record {
-            event_time: EventTime::now(),
+            event_time: Utc::now(),
             value: v,
         }
     }
