@@ -1,18 +1,22 @@
 [package]
 name = "pulse-state"
 version = "0.1.0"
-authors = ["Pulse Contributors"]
-edition = "2021"
-license = "MIT"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "State management utilities for Pulse — provides windowing, aggregations, and persistent operator state."
-repository = "https://github.com/brbtavares/pulse"
-readme = "../README.md"
+repository.workspace = true
+readme.workspace = true
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
 
 [features]
 rocksdb = ["dep:rocksdb"]
 
 [dependencies]
-pulse-core = { path = "../pulse-core" }
+pulse-core = { version = "0.1.0", path = "../pulse-core" }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 parking_lot = { workspace = true }

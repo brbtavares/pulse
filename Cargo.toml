@@ -19,7 +19,7 @@ repository = "https://github.com/brbtavares/pulse"
 readme = "README.md"
 
 [workspace.metadata.docs.rs]
-all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [workspace.dependencies]
 tokio = { version = "1.39", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }

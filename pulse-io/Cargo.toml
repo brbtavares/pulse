@@ -1,12 +1,17 @@
 [package]
 name = "pulse-io"
 version = "0.1.0"
-authors = ["Pulse Contributors"]
-edition = "2021"
-license = "MIT"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Input/output connectors for Pulse — integrates with external systems such as Kafka, Arrow, and Parquet."
-repository = "https://github.com/brbtavares/pulse"
-readme = "../README.md"
+repository.workspace = true
+readme.workspace = true
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+features = ["arrow", "parquet"] # omit kafka
+no-default-features = true
 
 [features]
 # Optional integrations. Enable per-crate via `--features` or in dependent crates.

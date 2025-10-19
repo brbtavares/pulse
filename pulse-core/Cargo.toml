@@ -1,12 +1,17 @@
 [package]
 name = "pulse-core"
 version = "0.1.0"
-authors = ["Pulse Contributors"]
-edition = "2021"
-license = "MIT"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Core runtime and dataflow engine for Pulse — defines execution graph, operators, and streaming primitives."
-repository = "https://github.com/brbtavares/pulse"
-readme = "../README.md"
+repository.workspace = true
+readme.workspace = true
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
+
 
 [features]
 rocksdb = ["dep:rocksdb"]

@@ -8,6 +8,10 @@ description = "Built-in operators and combinators for Pulse dataflows — map, f
 repository.workspace = true
 readme.workspace = true
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
+
 [dependencies]
 pulse-core  = { version = "0.1.0", path = "../pulse-core" }
 async-trait = { workspace = true }
