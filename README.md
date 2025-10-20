@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="Pulse logo" width="720" />
+</p>
+
 # Pulse
 
 [![CI](https://github.com/brbtavares/pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/brbtavares/pulse/actions/workflows/ci.yml)
