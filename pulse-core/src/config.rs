@@ -122,3 +122,72 @@ pub fn parse_duration_ms(s: &str) -> anyhow::Result<i64> {
     // default assume seconds
     Ok(s.parse::<i64>()? * 1_000)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_duration_suffixes() {
+        assert_eq!(parse_duration_ms("500ms").unwrap(), 500);
+        assert_eq!(parse_duration_ms("10s").unwrap(), 10_000);
+        assert_eq!(parse_duration_ms("2m").unwrap(), 120_000);
+        assert_eq!(parse_duration_ms("1h").unwrap(), 3_600_000);
+        // default seconds when no unit
+        assert_eq!(parse_duration_ms("42").unwrap(), 42_000);
+    }
+
+    #[test]
+    fn validate_file_pipeline_ok() {
+        let cfg = PipelineConfig {
+            source: SourceConfig {
+                kind: "file".into(),
+                path: PathBuf::from("/tmp/input.jsonl"),
+                time_field: "event_time".into(),
+                bootstrap_servers: None,
+                topic: None,
+                group_id: None,
+                auto_offset_reset: None,
+                commit_interval_ms: None,
+            },
+            time: TimeConfig { allowed_lateness: "0s".into() },
+            window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
+            ops: OpsConfig { count_by: Some("word".into()) },
+            sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None },
+        };
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_kafka_pipeline_ok() {
+        let cfg = PipelineConfig {
+            source: SourceConfig {
+                kind: "kafka".into(),
+                path: PathBuf::from("unused"),
+                time_field: "event_time".into(),
+                bootstrap_servers: Some("localhost:9092".into()),
+                topic: Some("t".into()),
+                group_id: Some("g".into()),
+                auto_offset_reset: Some("earliest".into()),
+                commit_interval_ms: Some(1000),
+            },
+            time: TimeConfig { allowed_lateness: "5s".into() },
+            window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
+            ops: OpsConfig { count_by: Some("word".into()) },
+            sink: SinkConfig { kind: "kafka".into(), out_dir: PathBuf::from("./out"), bootstrap_servers: Some("localhost:9092".into()), topic: Some("t2".into()), acks: Some("all".into()) },
+        };
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_missing_ops_count_by_errors() {
+        let cfg = PipelineConfig {
+            source: SourceConfig { kind: "file".into(), path: PathBuf::from("/tmp/in"), time_field: "ts".into(), bootstrap_servers: None, topic: None, group_id: None, auto_offset_reset: None, commit_interval_ms: None },
+            time: TimeConfig { allowed_lateness: "0s".into() },
+            window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
+            ops: OpsConfig { count_by: None },
+            sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None },
+        };
+        assert!(cfg.validate().is_err());
+    }
+}

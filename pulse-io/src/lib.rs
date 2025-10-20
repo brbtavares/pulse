@@ -516,4 +516,30 @@ mod tests {
 
         let _ = tokio::fs::remove_file(&path).await;
     }
+
+    #[tokio::test]
+    async fn file_source_emits_eof_watermark() {
+        // Arrange: a single-line JSONL with event_time
+        let path = tmp_file("wm");
+        let content = "{\"event_time\":1704067200000,\"text\":\"x\"}\n";
+        tokio::fs::write(&path, content).await.unwrap();
+
+        // Custom ctx capturing watermark calls
+        struct WmCtx { saw_wm: bool, out: Vec<Record>, kv: Arc<dyn KvState>, timers: Arc<dyn Timers> }
+        #[async_trait]
+        impl Context for WmCtx {
+            fn collect(&mut self, record: Record) { self.out.push(record); }
+            fn watermark(&mut self, _wm: Watermark) { self.saw_wm = true; }
+            fn kv(&self) -> Arc<dyn KvState> { self.kv.clone() }
+            fn timers(&self) -> Arc<dyn Timers> { self.timers.clone() }
+        }
+
+        let mut src = FileSource::jsonl(&path, "event_time");
+        let mut ctx = WmCtx { saw_wm: false, out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        src.run(&mut ctx).await.unwrap();
+        assert_eq!(ctx.out.len(), 1);
+        assert!(ctx.saw_wm, "EOF watermark not emitted by FileSource");
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
 }

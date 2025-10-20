@@ -966,4 +966,27 @@ mod tests {
         assert_eq!(ctx.out.len(), 2);
         assert_eq!(ctx.out[1].value["count"], serde_json::json!(2));
     }
+
+    #[tokio::test]
+    async fn windowed_agg_avg_and_distinct() {
+        let mut avg_op = WindowedAggregate::tumbling_avg("key", 60_000, "x");
+        let mut distinct_op = WindowedAggregate::tumbling_distinct("key", 60_000, "s");
+        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        // feed two records in same window
+        avg_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","x": 1}))).await.unwrap();
+        avg_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","x": 3}))).await.unwrap();
+        // watermark end of window
+        let wm = pulse_core::Watermark(pulse_core::EventTime(Utc.timestamp_millis_opt(((Utc::now().timestamp_millis()/60_000)*60_000 + 60_000) as i64).unwrap()));
+        avg_op.on_watermark(&mut ctx, wm).await.unwrap();
+        // Expect one output with avg=2.0
+        assert!(ctx.out.iter().any(|r| r.value.get("avg").is_some()));
+        // Reset output for distinct
+        ctx.out.clear();
+        distinct_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","s":"a"}))).await.unwrap();
+        distinct_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","s":"a"}))).await.unwrap();
+        distinct_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","s":"b"}))).await.unwrap();
+        distinct_op.on_watermark(&mut ctx, wm).await.unwrap();
+        // Expect distinct_count = 2
+        assert!(ctx.out.iter().any(|r| r.value.get("distinct_count").and_then(|v| v.as_i64()).unwrap_or(0) == 2));
+    }
 }
