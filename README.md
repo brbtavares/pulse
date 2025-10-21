@@ -90,8 +90,11 @@ Semantics overview:
 - `FileSink`: writes JSON lines to stdout/file
 - `ParquetSink` (feature `parquet`):
   - Schema: `event_time: timestamp(ms)`, `payload: utf8` (full JSON)
-  - Partitioning: `out_dir/dt=YYYY-MM-DD/part-*.parquet`
-  - Rotation: by row-count and time
+  - Partitioning:
+    - By date (default): `out_dir/dt=YYYY-MM-DD/part-*.parquet` (configurable format via `partition_format`)
+    - By field: `out_dir/<field>=<value>/part-*.parquet` (set `partition_field`)
+  - Rotation: by row-count, time, and optional bytes (`max_bytes`)
+  - Compression: `snappy` (default), `zstd`, or `none`
   - Tested: writes files then read back via Arrow reader, asserting row counts
 - `KafkaSource`/`KafkaSink` (feature `kafka`): integration with `rdkafka`, with resuming offsets from persisted state
 
@@ -130,8 +133,7 @@ allowed_lateness = "10s"
 # supported: tumbling|sliding|session
 type = "sliding"
 size = "60s"
-slide = "15s"   # para sliding; para session, usar: gap = "30s"
-# for sliding; for session, use: gap = "30s"
+slide = "15s"   # for sliding; for session, use: gap = "30s"
 
 [ops]
 # simple aggregation list; currently: count_by
@@ -140,6 +142,11 @@ count_by = "word"
 [sink]
 kind = "parquet"
 out_dir = "outputs"
+## Optional Parquet settings
+# compression = "snappy"      # one of: snappy (default) | zstd | none
+# max_bytes = 104857600        # rotate file when ~bytes reached (e.g. 100MB)
+# partition_field = "user_id" # partition by a payload field value
+# partition_format = "%Y-%m"  # date partition format when partitioning by event_time
 ```
 
 Validation rules:
@@ -219,6 +226,28 @@ Windows + Kafka notes: enabling `kafka` builds the native `librdkafka` by defaul
 
 - Install CMake and Visual Studio Build Tools (C++), then rerun the build
 - Or link against a preinstalled librdkafka and remove `cmake-build` feature
+
+## Running tests
+
+From the workspace root, you can run tests per crate. Some features are crate-specific:
+
+```powershell
+# Operators crate
+cargo test -p pulse-ops -- --nocapture
+
+# I/O crate with Parquet
+cargo test -p pulse-io --features parquet -- --nocapture
+
+# CLI crate (includes end-to-end goldens)
+cargo test -p pulse-bin -- --nocapture
+
+# All workspace tests (no extra features)
+cargo test -- --nocapture
+```
+
+Notes:
+- Only the `pulse-io` crate defines the `parquet` feature. Do not pass `--features parquet` to other crates.
+- The `kafka` feature is also only on `pulse-io` and requires native dependencies on Windows.
 
 ## Why not Flink / Arroyo / Fluvio / Materialize?
 

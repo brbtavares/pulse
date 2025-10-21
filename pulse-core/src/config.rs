@@ -53,6 +53,15 @@ pub struct SinkConfig {
     pub topic: Option<String>,
     #[serde(default)]
     pub acks: Option<String>, // "all" | "1" | "0"
+    // Parquet-specific options (when kind=="parquet")
+    #[serde(default)]
+    pub compression: Option<String>, // none|snappy|zstd
+    #[serde(default)]
+    pub max_bytes: Option<u64>,
+    #[serde(default)]
+    pub partition_field: Option<String>, // defaults to event_time if None
+    #[serde(default)]
+    pub partition_format: Option<String>, // e.g., %Y-%m-%d for date partitions
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -153,7 +162,7 @@ mod tests {
             time: TimeConfig { allowed_lateness: "0s".into() },
             window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
             ops: OpsConfig { count_by: Some("word".into()) },
-            sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None },
+            sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None, compression: None, max_bytes: None, partition_field: None, partition_format: None },
         };
         cfg.validate().unwrap();
     }
@@ -174,7 +183,7 @@ mod tests {
             time: TimeConfig { allowed_lateness: "5s".into() },
             window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
             ops: OpsConfig { count_by: Some("word".into()) },
-            sink: SinkConfig { kind: "kafka".into(), out_dir: PathBuf::from("./out"), bootstrap_servers: Some("localhost:9092".into()), topic: Some("t2".into()), acks: Some("all".into()) },
+            sink: SinkConfig { kind: "kafka".into(), out_dir: PathBuf::from("./out"), bootstrap_servers: Some("localhost:9092".into()), topic: Some("t2".into()), acks: Some("all".into()), compression: None, max_bytes: None, partition_field: None, partition_format: None },
         };
         cfg.validate().unwrap();
     }
@@ -186,7 +195,7 @@ mod tests {
             time: TimeConfig { allowed_lateness: "0s".into() },
             window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
             ops: OpsConfig { count_by: None },
-            sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None },
+            sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None, compression: None, max_bytes: None, partition_field: None, partition_format: None },
         };
         assert!(cfg.validate().is_err());
     }

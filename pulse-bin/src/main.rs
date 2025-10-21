@@ -99,13 +99,21 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
         .operator(op_window)
         .sink(match cfg.sink.kind.as_str() {
             "parquet" => {
-                let ps = pulse_io::ParquetSink::new(pulse_io::ParquetSinkConfig {
+                let partition = if let Some(f) = &cfg.sink.partition_field {
+                    pulse_io::PartitionSpec::ByField { field: f.clone() }
+                } else {
+                    let fmt = cfg.sink.partition_format.clone().unwrap_or_else(|| "%Y-%m-%d".into());
+                    pulse_io::PartitionSpec::ByDate { field: "event_time".into(), fmt }
+                };
+                let mut conf = pulse_io::ParquetSinkConfig {
                     out_dir: cfg.sink.out_dir.clone(),
-                    partition_by: pulse_io::PartitionSpec::ByDate { field: "event_time".into(), fmt: "%Y-%m-%d".into() },
+                    partition_by: partition,
                     max_rows: 1_000_000,
                     max_age: std::time::Duration::from_secs(300),
-                });
-                ps
+                    compression: cfg.sink.compression.clone(),
+                    max_bytes: cfg.sink.max_bytes.map(|b| b as usize),
+                };
+                pulse_io::ParquetSink::new(conf)
             }
             #[cfg(feature = "kafka")]
             "kafka" => {

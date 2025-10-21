@@ -316,6 +316,14 @@ pub struct WindowedAggregate {
     sessions: HashMap<serde_json::Value, (i128, i128, AggState)>,
     // Allowed lateness in milliseconds: postpone closing windows until wm - lateness >= end
     allowed_lateness_ms: i64,
+    // Last observed watermark in ms to evaluate late events
+    last_wm_ms: Option<i128>,
+    late_policy: LateDataPolicy,
+}
+
+#[derive(Clone, Debug)]
+enum LateDataPolicy {
+    Drop,
 }
 
 impl WindowedAggregate {
@@ -327,6 +335,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
     pub fn tumbling_sum(key_field: impl Into<String>, size_ms: i64, field: impl Into<String>) -> Self {
@@ -337,6 +347,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
     pub fn tumbling_avg(key_field: impl Into<String>, size_ms: i64, field: impl Into<String>) -> Self {
@@ -347,6 +359,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
     pub fn tumbling_distinct(key_field: impl Into<String>, size_ms: i64, field: impl Into<String>) -> Self {
@@ -357,6 +371,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
 
@@ -368,6 +384,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
     pub fn sliding_sum(
@@ -383,6 +401,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
     pub fn sliding_avg(
@@ -398,6 +418,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
     pub fn sliding_distinct(
@@ -413,6 +435,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
 
@@ -424,6 +448,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
     pub fn session_sum(key_field: impl Into<String>, gap_ms: i64, field: impl Into<String>) -> Self {
@@ -434,6 +460,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
     pub fn session_avg(key_field: impl Into<String>, gap_ms: i64, field: impl Into<String>) -> Self {
@@ -444,6 +472,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
     pub fn session_distinct(key_field: impl Into<String>, gap_ms: i64, field: impl Into<String>) -> Self {
@@ -454,6 +484,8 @@ impl WindowedAggregate {
             by_window: HashMap::new(),
             sessions: HashMap::new(),
             allowed_lateness_ms: 0,
+            last_wm_ms: None,
+            late_policy: LateDataPolicy::Drop,
         }
     }
 
@@ -529,6 +561,14 @@ fn finalize_value(state: &AggState, agg: &AggKind) -> serde_json::Value {
 impl Operator for WindowedAggregate {
     async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
         let ts_ms = rec.event_time.timestamp_millis() as i128; // ms
+        // Late data handling: if we have a watermark and this event is older than (wm - allowed_lateness), drop
+        if let Some(wm) = self.last_wm_ms {
+            if ts_ms < (wm - (self.allowed_lateness_ms as i128)) {
+                match self.late_policy {
+                    LateDataPolicy::Drop => return Ok(()),
+                }
+            }
+        }
         let key = rec
             .value
             .get(&self.key_field)
@@ -626,6 +666,7 @@ impl Operator for WindowedAggregate {
     async fn on_watermark(&mut self, ctx: &mut dyn Context, wm: Watermark) -> Result<()> {
         let wm_ms_raw = wm.0 .0.timestamp_millis() as i128;
         let wm_ms = wm_ms_raw - (self.allowed_lateness_ms as i128);
+        self.last_wm_ms = Some(wm_ms_raw);
 
         match self.win {
             WindowKind::Tumbling { .. } | WindowKind::Sliding { .. } => {

@@ -18,6 +18,7 @@ use tokio::fs;
 #[derive(Clone, Debug)]
 pub enum PartitionSpec {
     ByDate { field: String, fmt: String },
+    ByField { field: String },
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +29,10 @@ pub struct ParquetSinkConfig {
     pub max_rows: usize,
     /// Rotate a file when this time elapses without a rotation. Default: 60s.
     pub max_age: std::time::Duration,
+    /// Optional compression: none|snappy|zstd (default: snappy)
+    pub compression: Option<String>,
+    /// Optional approximate max bytes per file for rotation (in addition to rows/age).
+    pub max_bytes: Option<usize>,
 }
 
 impl Default for ParquetSinkConfig {
@@ -37,6 +42,8 @@ impl Default for ParquetSinkConfig {
             partition_by: PartitionSpec::ByDate { field: "event_time".into(), fmt: "%Y-%m-%d".into() },
             max_rows: 100_000,
             max_age: Duration::from_secs(60),
+            compression: Some("snappy".into()),
+            max_bytes: None,
         }
     }
 }
@@ -46,6 +53,7 @@ struct ActiveFile {
     started: Instant,
     rows: usize,
     path: PathBuf,
+    approx_bytes: usize,
 }
 
 pub struct ParquetSink {
@@ -78,6 +86,16 @@ impl ParquetSink {
                     s.to_string()
                 }
             }
+            PartitionSpec::ByField { field } => {
+                if let Some(v) = rec.value.get(field) {
+                    match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    }
+                } else {
+                    String::new()
+                }
+            }
         }
     }
 
@@ -103,17 +121,26 @@ impl ParquetSink {
 
     fn rotate_needed(&self) -> bool {
         if let Some(active) = &self.active {
-            active.rows >= self.cfg.max_rows || active.started.elapsed() >= self.cfg.max_age
+            let by_rows = active.rows >= self.cfg.max_rows;
+            let by_age = active.started.elapsed() >= self.cfg.max_age;
+            let by_bytes = self.cfg.max_bytes.map(|b| active.approx_bytes >= b).unwrap_or(false);
+            by_rows || by_age || by_bytes
         } else {
             true
         }
     }
 
-    fn new_writer(path: &Path, schema: std::sync::Arc<Schema>) -> Result<ActiveFile> {
+    fn new_writer(path: &Path, schema: std::sync::Arc<Schema>, compression: Option<&str>) -> Result<ActiveFile> {
         let file = std::fs::File::create(path)?;
-        let props = WriterProperties::builder().build();
+        let mut builder = WriterProperties::builder();
+        match compression.unwrap_or("snappy").to_lowercase().as_str() {
+            "snappy" => { builder = builder.set_compression(parquet::basic::Compression::SNAPPY); }
+            "zstd" => { builder = builder.set_compression(parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default())); }
+            _ => { builder = builder.set_compression(parquet::basic::Compression::UNCOMPRESSED); }
+        }
+        let props = builder.build();
         let writer = ArrowWriter::try_new(file, schema, Some(props)).map_err(|e| anyhow::anyhow!(e))?;
-        Ok(ActiveFile { writer, started: Instant::now(), rows: 0, path: path.to_path_buf() })
+        Ok(ActiveFile { writer, started: Instant::now(), rows: 0, path: path.to_path_buf(), approx_bytes: 0 })
     }
 
     fn open_partition(&mut self, part: &str) -> Result<()> {
@@ -127,7 +154,7 @@ impl ParquetSink {
             std::fs::create_dir_all(&dir)?;
             let fname = format!("part-{}.parquet", chrono::Utc::now().timestamp_millis());
             let path = dir.join(fname);
-            self.active = Some(Self::new_writer(&path, self.schema.clone())?);
+            self.active = Some(Self::new_writer(&path, self.schema.clone(), self.cfg.compression.as_deref())?);
             self.current_part = Some(part.to_string());
         }
         Ok(())
@@ -154,7 +181,7 @@ impl Sink for ParquetSink {
                 let dir = self.cfg.out_dir.join(format!("dt={}", p));
                 let fname = format!("part-{}.parquet", chrono::Utc::now().timestamp_millis());
                 let path = dir.join(fname);
-                self.active = Some(Self::new_writer(&path, self.schema.clone())?);
+                self.active = Some(Self::new_writer(&path, self.schema.clone(), self.cfg.compression.as_deref())?);
             }
         }
         // For simplicity, write record-by-record as single-row batches.
@@ -162,6 +189,8 @@ impl Sink for ParquetSink {
         if let Some(active) = &mut self.active {
             active.writer.write(&batch).map_err(|e| anyhow::anyhow!(e))?;
             active.rows += 1;
+            // Roughly estimate bytes as payload string + fixed overhead; for simplicity, use JSON length
+            if let Some(s) = record.value.as_str() { active.approx_bytes += s.len(); } else { active.approx_bytes += serde_json::to_string(&record.value)?.len(); }
         }
         Ok(())
     }
@@ -182,7 +211,6 @@ impl Drop for ParquetSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::record_batch::RecordBatchReader;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     fn tmp_dir(prefix: &str) -> PathBuf {
@@ -195,7 +223,7 @@ mod tests {
     #[tokio::test]
     async fn writes_and_reads_back() {
         let out_dir = tmp_dir("parquet");
-        let cfg = ParquetSinkConfig { out_dir: out_dir.clone(), partition_by: PartitionSpec::ByDate { field: "event_time".into(), fmt: "%Y-%m-%d".into() }, max_rows: 10, max_age: Duration::from_secs(60) };
+    let cfg = ParquetSinkConfig { out_dir: out_dir.clone(), partition_by: PartitionSpec::ByDate { field: "event_time".into(), fmt: "%Y-%m-%d".into() }, max_rows: 10, max_age: Duration::from_secs(60), compression: Some("snappy".into()), max_bytes: None };
         let mut sink = ParquetSink::new(cfg);
 
         // Write 3 records on same day
@@ -205,7 +233,7 @@ mod tests {
             sink.on_element(rec).await.unwrap();
         }
         // Close current writer explicitly by simulating rotation
-        if let Some(mut active) = sink.active.take() {
+        if let Some(active) = sink.active.take() {
             let _ = active.writer.close();
         }
 
