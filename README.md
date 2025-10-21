@@ -105,6 +105,10 @@ Semantics overview:
   - `pulse_watermark_lag_ms` (gauge)
   - `pulse_bytes_written_total{sink}`
   - `pulse_state_size{operator}`
+  - `pulse_operator_process_latency_ms` (histogram)
+  - `pulse_sink_process_latency_ms` (histogram)
+  - `pulse_queue_depth` (gauge)
+  - `pulse_dropped_records_total{reason}` (counter)
 - `/metrics` HTTP endpoint served by `pulse-bin` (axum 0.7)
 
 ## CLI: pulse
@@ -117,6 +121,7 @@ Binary crate: `pulse-bin`. Subcommands:
 - `pulse run --config pipeline.toml [--http-port 9898]`
   - Loads a TOML config, validates it, builds the pipeline, and runs until EOF (or Ctrl-C if you wire a streaming source).
   - If `--http-port` is provided, starts `/metrics` on that port.
+  - Optional backpressure (soft-bound) via environment: set `PULSE_CHANNEL_BOUND` (e.g., `PULSE_CHANNEL_BOUND=10000`) to drop new records when the in-flight depth reaches the bound. Watermarks are never dropped.
 
 ### Config format (`pulse-core::config`)
 
@@ -220,6 +225,7 @@ cargo build -p pulse-io --features kafka
 
 # Arrow/Parquet
 cargo build -p pulse-io --features parquet
+
 ```
 
 Windows + Kafka notes: enabling `kafka` builds the native `librdkafka` by default and requires CMake and MSVC Build Tools.

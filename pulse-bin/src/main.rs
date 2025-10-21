@@ -24,7 +24,7 @@ fn app() -> Router {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into());
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt().with_env_filter(filter.clone()).init();
     let cli = Cli::parse();
     match cli.command {
         Commands::Serve { port } => {
@@ -105,7 +105,7 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
                     let fmt = cfg.sink.partition_format.clone().unwrap_or_else(|| "%Y-%m-%d".into());
                     pulse_io::PartitionSpec::ByDate { field: "event_time".into(), fmt }
                 };
-                let mut conf = pulse_io::ParquetSinkConfig {
+                let conf = pulse_io::ParquetSinkConfig {
                     out_dir: cfg.sink.out_dir.clone(),
                     partition_by: partition,
                     max_rows: 1_000_000,
@@ -275,4 +275,69 @@ mod tests {
         // Cleanup
         remove_dir_all_quiet(&tmp_out);
     }
+
+    #[tokio::test]
+    async fn golden_sliding_pipeline_parquet_rowcount() {
+        // Fixture base path
+        let mut cfg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        cfg_path.pop(); // workspace root
+        let pipeline_toml = cfg_path.join("pulse-tests/fixtures/simple/pipeline.toml");
+        assert!(pipeline_toml.exists(), "fixture pipeline missing: {:?}", pipeline_toml);
+
+        // Load and modify to sliding window with 60s size and 15s slide
+        let text = tokio::fs::read_to_string(&pipeline_toml).await.unwrap();
+        let mut cfg: pulse_core::config::PipelineConfig = toml::from_str(&text).unwrap();
+        // Ensure absolute path for input
+        let abs_input = cfg_path.join("pulse-tests/fixtures/simple/input.jsonl");
+        cfg.source.path = abs_input;
+        // Switch window to sliding
+        cfg.window.kind = "sliding".into();
+        cfg.window.size = "60s".into();
+        cfg.window.slide = Some("15s".into());
+        cfg.window.gap = None;
+
+        // Temp output dir and config path
+        let tmp_out = std::env::temp_dir().join(format!(
+            "pulse_golden_out_sliding_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        cfg.sink.out_dir = tmp_out.clone();
+        let tmp_cfg = tmp_out.with_file_name("pipeline.sliding.temp.toml");
+        if let Some(parent) = tmp_cfg.parent() { let _ = std::fs::create_dir_all(parent); }
+        tokio::fs::write(&tmp_cfg, toml::to_string(&cfg).unwrap()).await.unwrap();
+
+        // Ensure clean output dir
+        remove_dir_all_quiet(&tmp_out);
+
+        // Run pipeline
+        run_pipeline(tmp_cfg.clone()).await.unwrap();
+
+        // Count Parquet rows
+        let mut total_rows = 0usize;
+        if let Ok(rd) = std::fs::read_dir(&tmp_out) {
+            for part in rd.flatten() {
+                if part.path().is_dir() {
+                    for file in std::fs::read_dir(part.path()).unwrap().flatten() {
+                        let p = file.path();
+                        if p.extension().map(|e| e == "parquet").unwrap_or(false) {
+                            let f = std::fs::File::open(&p).unwrap();
+                            let builder = ParquetRecordBatchReaderBuilder::try_new(f).unwrap();
+                            let mut reader = builder.build().unwrap();
+                            while let Some(batch) = reader.next() {
+                                total_rows += batch.unwrap().num_rows();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // For sliding windows (size=60s, slide=15s) over events at 0s(a),20s(a),40s(b),
+        // overlapping windows produce multiple emissions: expected total rows = 9.
+        assert_eq!(total_rows, 9, "unexpected parquet total rows for sliding window");
+
+        // Cleanup
+        remove_dir_all_quiet(&tmp_out);
+    }
+
 }

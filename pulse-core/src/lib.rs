@@ -48,6 +48,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -321,20 +322,37 @@ impl Executor {
             Data(Record),
             Wm(Watermark),
         }
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<EventMsg>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<EventMsg>();
+    // Soft-bound drop policy controlled by env PULSE_CHANNEL_BOUND (>0):
+    // If the in-flight depth reaches the bound, new Data records are dropped at source Collect.
+    let bound = std::env::var("PULSE_CHANNEL_BOUND").ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    let depth = Arc::new(AtomicI64::new(0));
 
         struct ExecCtx {
             tx: tokio::sync::mpsc::UnboundedSender<EventMsg>,
             kv: Arc<dyn KvState>,
             timers: Arc<dyn Timers>,
+            bound: i64,
+            depth: Arc<AtomicI64>,
         }
 
         #[async_trait::async_trait]
         impl Context for ExecCtx {
             fn collect(&mut self, record: Record) {
-                let _ = self.tx.send(EventMsg::Data(record));
+                // Soft-bound: drop data if depth reached bound
+                if self.bound > 0 && self.depth.load(Ordering::Relaxed) >= self.bound {
+                    metrics::DROPPED_RECORDS.with_label_values(&["channel_full"]).inc();
+                    return;
+                }
+                if self.tx.send(EventMsg::Data(record)).is_ok() {
+                    self.depth.fetch_add(1, Ordering::Relaxed);
+                    metrics::QUEUE_DEPTH.inc();
+                } else {
+                    metrics::DROPPED_RECORDS.with_label_values(&["send_failed"]).inc();
+                }
             }
             fn watermark(&mut self, wm: Watermark) {
+                // Always forward watermarks; never drop
                 let _ = self.tx.send(EventMsg::Wm(wm));
             }
             fn kv(&self) -> Arc<dyn KvState> {
@@ -345,7 +363,7 @@ impl Executor {
             }
         }
 
-        let mut source = self.source.take().ok_or_else(|| anyhow::anyhow!("no source"))?;
+    let mut source = self.source.take().ok_or_else(|| anyhow::anyhow!("no source"))?;
         let mut ops = std::mem::take(&mut self.operators);
         let mut sink = self.sink.take().ok_or_else(|| anyhow::anyhow!("no sink"))?;
 
@@ -357,6 +375,8 @@ impl Executor {
             tx: tx.clone(),
             kv: kv.clone(),
             timers: timers.clone(),
+            bound,
+            depth: depth.clone(),
         };
         let src_handle = tokio::spawn(async move { source.run(&mut sctx).await });
         // Drop our local sender so the channel closes once the source finishes (its clone will drop then)
@@ -402,6 +422,9 @@ impl Executor {
             }
 
             while let Some(msg) = rx.recv().await {
+                // Adjust queue depth when we pull an item
+                depth.fetch_sub(1, Ordering::Relaxed);
+                metrics::QUEUE_DEPTH.dec();
                 match msg {
                     EventMsg::Data(rec) => {
                         // Pipe record through the operator chain collecting outputs at each step
@@ -418,7 +441,10 @@ impl Executor {
                                     kv: kv.clone(),
                                     timers: timers.clone(),
                                 };
+                                let t0 = std::time::Instant::now();
                                 op.on_element(&mut lctx, item).await?;
+                                let dt = t0.elapsed().as_secs_f64() * 1000.0;
+                                metrics::OP_PROC_LATENCY_MS.observe(dt);
                             }
                             batch = next;
                             if batch.is_empty() {
@@ -426,7 +452,10 @@ impl Executor {
                             }
                         }
                         for out in batch.into_iter() {
+                            let t0 = std::time::Instant::now();
                             sink.on_element(out).await?;
+                            let dt = t0.elapsed().as_secs_f64() * 1000.0;
+                            metrics::SINK_PROC_LATENCY_MS.observe(dt);
                         }
                     }
                     EventMsg::Wm(wm) => {
