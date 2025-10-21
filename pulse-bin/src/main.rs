@@ -61,6 +61,18 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
     // Build components
     let allowed_lateness_ms = pulse_core::config::parse_duration_ms(&cfg.time.allowed_lateness)?;
     let win_size_ms = pulse_core::config::parse_duration_ms(&cfg.window.size)?;
+    let op_window = match cfg.window.kind.as_str() {
+        "tumbling" => pulse_ops::WindowedAggregate::tumbling_count(cfg.ops.count_by.clone().unwrap(), win_size_ms),
+        "sliding" => {
+            let slide_ms = pulse_core::config::parse_duration_ms(cfg.window.slide.as_deref().ok_or_else(|| anyhow::anyhow!("slide must be set for sliding window"))?)?;
+            pulse_ops::WindowedAggregate::sliding_count(cfg.ops.count_by.clone().unwrap(), win_size_ms, slide_ms)
+        }
+        "session" => {
+            let gap_ms = pulse_core::config::parse_duration_ms(cfg.window.gap.as_deref().ok_or_else(|| anyhow::anyhow!("gap must be set for session window"))?)?;
+            pulse_ops::WindowedAggregate::session_count(cfg.ops.count_by.clone().unwrap(), gap_ms)
+        }
+        other => return Err(anyhow::anyhow!(format!("unsupported window kind: {}", other))),
+    }.with_allowed_lateness(allowed_lateness_ms);
 
     // Build source based on kind
     #[allow(unused_mut)]
@@ -84,7 +96,7 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
     let mut exec = pulse_core::Executor::new();
     exec.source(src)
         .operator(pulse_ops::KeyBy::new(cfg.ops.count_by.clone().unwrap()))
-        .operator(pulse_ops::WindowedAggregate::tumbling_count("key", win_size_ms))
+        .operator(op_window)
         .sink(match cfg.sink.kind.as_str() {
             "parquet" => {
                 let ps = pulse_io::ParquetSink::new(pulse_io::ParquetSinkConfig {
@@ -192,6 +204,65 @@ mod tests {
         // For the fixture input of 3 events within the same 60s window for keys a,a,b,
         // WordCount tumbling count should emit 2 rows (keys a and b) when flushed by EOF watermark.
         assert_eq!(total_rows, 2, "unexpected parquet total rows");
+
+        // Cleanup
+        remove_dir_all_quiet(&tmp_out);
+    }
+
+    #[tokio::test]
+    async fn golden_session_pipeline_parquet_rowcount() {
+        // Fixture base path
+        let mut cfg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        cfg_path.pop(); // workspace root
+        let pipeline_toml = cfg_path.join("pulse-tests/fixtures/simple/pipeline.toml");
+        assert!(pipeline_toml.exists(), "fixture pipeline missing: {:?}", pipeline_toml);
+
+        // Load and modify to session window with 30s gap
+        let text = tokio::fs::read_to_string(&pipeline_toml).await.unwrap();
+        let mut cfg: pulse_core::config::PipelineConfig = toml::from_str(&text).unwrap();
+        // Ensure absolute path for input
+        let abs_input = cfg_path.join("pulse-tests/fixtures/simple/input.jsonl");
+        cfg.source.path = abs_input;
+        // Switch window to session; keep size (unused) to satisfy parsing
+        cfg.window.kind = "session".into();
+        cfg.window.gap = Some("30s".into());
+        cfg.window.slide = None;
+
+        // Temp output dir and config path
+        let tmp_out = std::env::temp_dir().join(format!("pulse_golden_out_session_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        cfg.sink.out_dir = tmp_out.clone();
+        let tmp_cfg = tmp_out.with_file_name("pipeline.session.temp.toml");
+        if let Some(parent) = tmp_cfg.parent() { let _ = std::fs::create_dir_all(parent); }
+        tokio::fs::write(&tmp_cfg, toml::to_string(&cfg).unwrap()).await.unwrap();
+
+        // Ensure clean output dir
+        remove_dir_all_quiet(&tmp_out);
+
+        // Run pipeline
+        run_pipeline(tmp_cfg.clone()).await.unwrap();
+
+        // Count Parquet rows
+        let mut total_rows = 0usize;
+        if let Ok(rd) = std::fs::read_dir(&tmp_out) {
+            for part in rd.flatten() {
+                if part.path().is_dir() {
+                    for file in std::fs::read_dir(part.path()).unwrap().flatten() {
+                        let p = file.path();
+                        if p.extension().map(|e| e == "parquet").unwrap_or(false) {
+                            let f = std::fs::File::open(&p).unwrap();
+                            let builder = ParquetRecordBatchReaderBuilder::try_new(f).unwrap();
+                            let mut reader = builder.build().unwrap();
+                            while let Some(batch) = reader.next() {
+                                total_rows += batch.unwrap().num_rows();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Para o input com 3 eventos (a, a, b) e gap=30s, devem resultar 2 sessões (a e b)
+        assert_eq!(total_rows, 2, "unexpected parquet total rows for session window");
 
         // Cleanup
         remove_dir_all_quiet(&tmp_out);

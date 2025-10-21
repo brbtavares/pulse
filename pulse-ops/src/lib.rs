@@ -314,6 +314,8 @@ pub struct WindowedAggregate {
     by_window: HashMap<(i128, serde_json::Value), (i128 /*start_ms*/, AggState)>,
     // For session: key -> (start_ms, last_seen_ms, state)
     sessions: HashMap<serde_json::Value, (i128, i128, AggState)>,
+    // Allowed lateness in milliseconds: postpone closing windows until wm - lateness >= end
+    allowed_lateness_ms: i64,
 }
 
 impl WindowedAggregate {
@@ -324,6 +326,7 @@ impl WindowedAggregate {
             agg: AggKind::Count,
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
     pub fn tumbling_sum(key_field: impl Into<String>, size_ms: i64, field: impl Into<String>) -> Self {
@@ -333,6 +336,7 @@ impl WindowedAggregate {
             agg: AggKind::Sum { field: field.into() },
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
     pub fn tumbling_avg(key_field: impl Into<String>, size_ms: i64, field: impl Into<String>) -> Self {
@@ -342,6 +346,7 @@ impl WindowedAggregate {
             agg: AggKind::Avg { field: field.into() },
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
     pub fn tumbling_distinct(key_field: impl Into<String>, size_ms: i64, field: impl Into<String>) -> Self {
@@ -351,6 +356,7 @@ impl WindowedAggregate {
             agg: AggKind::Distinct { field: field.into() },
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
 
@@ -361,6 +367,7 @@ impl WindowedAggregate {
             agg: AggKind::Count,
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
     pub fn sliding_sum(
@@ -375,6 +382,7 @@ impl WindowedAggregate {
             agg: AggKind::Sum { field: field.into() },
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
     pub fn sliding_avg(
@@ -389,6 +397,7 @@ impl WindowedAggregate {
             agg: AggKind::Avg { field: field.into() },
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
     pub fn sliding_distinct(
@@ -403,6 +412,7 @@ impl WindowedAggregate {
             agg: AggKind::Distinct { field: field.into() },
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
 
@@ -413,6 +423,7 @@ impl WindowedAggregate {
             agg: AggKind::Count,
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
     pub fn session_sum(key_field: impl Into<String>, gap_ms: i64, field: impl Into<String>) -> Self {
@@ -422,6 +433,7 @@ impl WindowedAggregate {
             agg: AggKind::Sum { field: field.into() },
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
     pub fn session_avg(key_field: impl Into<String>, gap_ms: i64, field: impl Into<String>) -> Self {
@@ -431,6 +443,7 @@ impl WindowedAggregate {
             agg: AggKind::Avg { field: field.into() },
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
     }
     pub fn session_distinct(key_field: impl Into<String>, gap_ms: i64, field: impl Into<String>) -> Self {
@@ -440,7 +453,13 @@ impl WindowedAggregate {
             agg: AggKind::Distinct { field: field.into() },
             by_window: HashMap::new(),
             sessions: HashMap::new(),
+            allowed_lateness_ms: 0,
         }
+    }
+
+    pub fn with_allowed_lateness(mut self, ms: i64) -> Self {
+        self.allowed_lateness_ms = ms.max(0);
+        self
     }
 }
 
@@ -605,7 +624,8 @@ impl Operator for WindowedAggregate {
     }
 
     async fn on_watermark(&mut self, ctx: &mut dyn Context, wm: Watermark) -> Result<()> {
-    let wm_ms = wm.0 .0.timestamp_millis() as i128;
+        let wm_ms_raw = wm.0 .0.timestamp_millis() as i128;
+        let wm_ms = wm_ms_raw - (self.allowed_lateness_ms as i128);
 
         match self.win {
             WindowKind::Tumbling { .. } | WindowKind::Sliding { .. } => {
@@ -684,8 +704,8 @@ impl Operator for WindowedAggregate {
         when: EventTime,
         _key: Option<Vec<u8>>,
     ) -> Result<()> {
-        // Treat timers same as watermarks for emission, but only for windows ending at `when`.
-        let when_ms = when.0.timestamp_millis() as i128;
+        // Treat timers same as watermarks for emission, but apply allowed lateness shift.
+        let when_ms = when.0.timestamp_millis() as i128 - (self.allowed_lateness_ms as i128);
 
         match self.win {
             WindowKind::Tumbling { .. } | WindowKind::Sliding { .. } => {
@@ -965,6 +985,23 @@ mod tests {
             .unwrap();
         assert_eq!(ctx.out.len(), 2);
         assert_eq!(ctx.out[1].value["count"], serde_json::json!(2));
+    }
+
+    #[tokio::test]
+    async fn windowed_allowed_lateness_defers_emission() {
+        let mut op = WindowedAggregate::tumbling_count("word", 60_000).with_allowed_lateness(30_000);
+        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        // Two events in first minute window
+        op.on_element(&mut ctx, rec(serde_json::json!({"word":"a"}))).await.unwrap();
+        op.on_element(&mut ctx, rec(serde_json::json!({"word":"a"}))).await.unwrap();
+        // Watermark at window end should NOT emit due to allowed lateness of 30s
+        let base = Utc::now();
+        let end_ms = ((base.timestamp_millis()/60_000)*60_000 + 60_000) as i64;
+        op.on_watermark(&mut ctx, Watermark(EventTime(Utc.timestamp_millis_opt(end_ms).unwrap()))).await.unwrap();
+        assert!(ctx.out.is_empty());
+        // After lateness passes, emission should occur
+        op.on_watermark(&mut ctx, Watermark(EventTime(Utc.timestamp_millis_opt(end_ms + 30_000).unwrap()))).await.unwrap();
+        assert!(!ctx.out.is_empty());
     }
 
     #[tokio::test]

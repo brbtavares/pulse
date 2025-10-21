@@ -149,6 +149,7 @@ mod kafka {
     use rdkafka::message::{BorrowedMessage, Message};
     use rdkafka::producer::{FutureProducer, FutureRecord};
     use rdkafka::ClientConfig;
+    use rdkafka::{Offset, TopicPartitionList};
 
     const CP_NS: &[u8] = b"kafka:offset:"; // namespace for checkpoint offset per topic-partition
 
@@ -230,9 +231,36 @@ mod kafka {
                 .create()
                 .context("failed to create kafka consumer")?;
 
-            consumer
-                .subscribe(&[&self.topic])
-                .context("failed to subscribe to topic")?;
+            // Determine partitions and starting offsets from KvState (resume) or fallback policy
+            let md = consumer
+                .client()
+                .fetch_metadata(Some(&self.topic), std::time::Duration::from_secs(3))
+                .map_err(|e| Error::Anyhow(e.into()))?;
+            let topic_md = md
+                .topics()
+                .iter()
+                .find(|t| t.name() == self.topic)
+                .ok_or_else(|| Error::Anyhow(anyhow::anyhow!("topic metadata not found")))?;
+            let mut tpl = TopicPartitionList::new();
+            for p in topic_md.partitions() {
+                let part = p.id();
+                let key = self.cp_key(part);
+                let stored = ctx.kv().get(&key).await?;
+                let start_off = if let Some(bytes) = stored {
+                    // resume from last committed + 1 to avoid duplicates beyond at-least-once
+                    let s = String::from_utf8_lossy(&bytes);
+                    if let Ok(o) = s.parse::<i64>() { Offset::Offset(o + 1) } else { Offset::Beginning }
+                } else {
+                    match self.auto_offset_reset.as_deref() {
+                        Some("earliest") => Offset::Beginning,
+                        Some("latest") => Offset::End,
+                        _ => Offset::End,
+                    }
+                };
+                // Ignore error here; add_partition_offset only fails on invalid params
+                let _ = tpl.add_partition_offset(&self.topic, part, start_off);
+            }
+            consumer.assign(&tpl).map_err(|e| Error::Anyhow(e.into()))?;
 
             let mut last_commit = std::time::Instant::now();
             let mut stream = consumer.stream();

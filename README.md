@@ -20,7 +20,7 @@ Pulse is a tiny, modular, event-time streaming framework (Flink/Beam-like) writt
 Goals:
 - Local-first: zero external services required for the common path
 - Stream processing with event-time and watermarks
-- Configurable windowing (tumbling/sliding/session APIs, tumbling wired in CLI)
+- Configurable windowing (tumbling/sliding/session) also in CLI
 - Pluggable state backends (in-memory and optional RocksDB)
 - File and Parquet I/O, plus optional Kafka
 - First-class observability (tracing/Prometheus)
@@ -42,7 +42,7 @@ Goals:
   - `FileSource` (JSONL/CSV) with EOF watermark
   - `FileSink` (JSONL)
   - `ParquetSink` (feature `parquet`) with date partitioning and rotation
-  - `KafkaSource`/`KafkaSink` (feature `kafka`)
+  - `KafkaSource`/`KafkaSink` (feature `kafka`) with resume from persisted offsets
 - `pulse-examples`: runnable examples and sample data
 - `pulse-bin`: CLI (`pulse`) and `/metrics` HTTP server
 
@@ -61,8 +61,8 @@ Semantics overview:
 - FileSource emits a final EOF watermark far in the future to flush all windows in batch-like runs.
 
 ### Windowing
-- Operators: `WindowedAggregate` supports Tumbling/Sliding/Session (API)
-- The CLI currently wires Tumbling windows for count-by-key
+- Operators: `WindowedAggregate` supports Tumbling/Sliding/Session
+- The CLI supports tumbling, sliding, and session for count-by-key
 - EOF watermark emitted by `FileSource` flushes windows
 
 ### State & snapshots
@@ -93,7 +93,7 @@ Semantics overview:
   - Partitioning: `out_dir/dt=YYYY-MM-DD/part-*.parquet`
   - Rotation: by row-count and time
   - Tested: writes files then read back via Arrow reader, asserting row counts
-- `KafkaSource`/`KafkaSink` (feature `kafka`): basic integration using `rdkafka`
+- `KafkaSource`/`KafkaSink` (feature `kafka`): integration with `rdkafka`, with resuming offsets from persisted state
 
 ### Observability
 - Tracing spans on operators (receive/emit) using `tracing`
@@ -127,9 +127,11 @@ time_field = "event_time"
 allowed_lateness = "10s"
 
 [window]
-# supported in API: tumbling|sliding|session; CLI wires tumbling now
-type = "tumbling"
+# supported: tumbling|sliding|session
+type = "sliding"
 size = "60s"
+slide = "15s"   # para sliding; para session, usar: gap = "30s"
+# for sliding; for session, use: gap = "30s"
 
 [ops]
 # simple aggregation list; currently: count_by
