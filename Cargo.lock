@@ -1542,6 +1542,7 @@ dependencies = [
  "pulse-core",
  "pulse-io",
  "pulse-ops",
+ "serde_json",
  "tokio",
  "toml",
  "tower",

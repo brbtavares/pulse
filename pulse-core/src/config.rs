@@ -39,6 +39,12 @@ pub struct WindowConfig {
 pub struct OpsConfig {
     #[serde(default)]
     pub count_by: Option<String>,
+    /// Aggregation to perform: count|sum|avg|distinct (default: count)
+    #[serde(default)]
+    pub agg: Option<String>,
+    /// Field used for sum/avg/distinct (required when agg is not count)
+    #[serde(default)]
+    pub agg_field: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -109,6 +115,17 @@ impl PipelineConfig {
         if self.ops.count_by.is_none() {
             anyhow::bail!("ops.count_by must be set (e.g., word field)");
         }
+        // Validate aggregation selection
+        let agg = self.ops.agg.as_deref().unwrap_or("count");
+        match agg {
+            "count" => {}
+            "sum" | "avg" | "distinct" => {
+                if self.ops.agg_field.as_deref().unwrap_or("").is_empty() {
+                    anyhow::bail!("ops.agg_field must be set when ops.agg is sum|avg|distinct");
+                }
+            }
+            other => anyhow::bail!("unsupported ops.agg: {}", other),
+        }
         Ok(())
     }
 }
@@ -161,7 +178,7 @@ mod tests {
             },
             time: TimeConfig { allowed_lateness: "0s".into() },
             window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
-            ops: OpsConfig { count_by: Some("word".into()) },
+            ops: OpsConfig { count_by: Some("word".into()), ..Default::default() },
             sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None, compression: None, max_bytes: None, partition_field: None, partition_format: None },
         };
         cfg.validate().unwrap();
@@ -182,7 +199,7 @@ mod tests {
             },
             time: TimeConfig { allowed_lateness: "5s".into() },
             window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
-            ops: OpsConfig { count_by: Some("word".into()) },
+            ops: OpsConfig { count_by: Some("word".into()), ..Default::default() },
             sink: SinkConfig { kind: "kafka".into(), out_dir: PathBuf::from("./out"), bootstrap_servers: Some("localhost:9092".into()), topic: Some("t2".into()), acks: Some("all".into()), compression: None, max_bytes: None, partition_field: None, partition_format: None },
         };
         cfg.validate().unwrap();
@@ -194,7 +211,7 @@ mod tests {
             source: SourceConfig { kind: "file".into(), path: PathBuf::from("/tmp/in"), time_field: "ts".into(), bootstrap_servers: None, topic: None, group_id: None, auto_offset_reset: None, commit_interval_ms: None },
             time: TimeConfig { allowed_lateness: "0s".into() },
             window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
-            ops: OpsConfig { count_by: None },
+            ops: OpsConfig { count_by: None, ..Default::default() },
             sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None, compression: None, max_bytes: None, partition_field: None, partition_format: None },
         };
         assert!(cfg.validate().is_err());

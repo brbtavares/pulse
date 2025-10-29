@@ -61,15 +61,36 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
     // Build components
     let allowed_lateness_ms = pulse_core::config::parse_duration_ms(&cfg.time.allowed_lateness)?;
     let win_size_ms = pulse_core::config::parse_duration_ms(&cfg.window.size)?;
+    let key_field = cfg.ops.count_by.clone().unwrap();
+    let agg = cfg.ops.agg.as_deref().unwrap_or("count");
+    let agg_field = cfg.ops.agg_field.clone();
     let op_window = match cfg.window.kind.as_str() {
-        "tumbling" => pulse_ops::WindowedAggregate::tumbling_count(cfg.ops.count_by.clone().unwrap(), win_size_ms),
+        "tumbling" => match agg {
+            "count" => pulse_ops::WindowedAggregate::tumbling_count(key_field.clone(), win_size_ms),
+            "sum" => pulse_ops::WindowedAggregate::tumbling_sum(key_field.clone(), win_size_ms, agg_field.clone().unwrap()),
+            "avg" => pulse_ops::WindowedAggregate::tumbling_avg(key_field.clone(), win_size_ms, agg_field.clone().unwrap()),
+            "distinct" => pulse_ops::WindowedAggregate::tumbling_distinct(key_field.clone(), win_size_ms, agg_field.clone().unwrap()),
+            other => return Err(anyhow::anyhow!(format!("unsupported ops.agg: {}", other))),
+        },
         "sliding" => {
             let slide_ms = pulse_core::config::parse_duration_ms(cfg.window.slide.as_deref().ok_or_else(|| anyhow::anyhow!("slide must be set for sliding window"))?)?;
-            pulse_ops::WindowedAggregate::sliding_count(cfg.ops.count_by.clone().unwrap(), win_size_ms, slide_ms)
+            match agg {
+                "count" => pulse_ops::WindowedAggregate::sliding_count(key_field.clone(), win_size_ms, slide_ms),
+                "sum" => pulse_ops::WindowedAggregate::sliding_sum(key_field.clone(), win_size_ms, slide_ms, agg_field.clone().unwrap()),
+                "avg" => pulse_ops::WindowedAggregate::sliding_avg(key_field.clone(), win_size_ms, slide_ms, agg_field.clone().unwrap()),
+                "distinct" => pulse_ops::WindowedAggregate::sliding_distinct(key_field.clone(), win_size_ms, slide_ms, agg_field.clone().unwrap()),
+                other => return Err(anyhow::anyhow!(format!("unsupported ops.agg: {}", other))),
+            }
         }
         "session" => {
             let gap_ms = pulse_core::config::parse_duration_ms(cfg.window.gap.as_deref().ok_or_else(|| anyhow::anyhow!("gap must be set for session window"))?)?;
-            pulse_ops::WindowedAggregate::session_count(cfg.ops.count_by.clone().unwrap(), gap_ms)
+            match agg {
+                "count" => pulse_ops::WindowedAggregate::session_count(key_field.clone(), gap_ms),
+                "sum" => pulse_ops::WindowedAggregate::session_sum(key_field.clone(), gap_ms, agg_field.clone().unwrap()),
+                "avg" => pulse_ops::WindowedAggregate::session_avg(key_field.clone(), gap_ms, agg_field.clone().unwrap()),
+                "distinct" => pulse_ops::WindowedAggregate::session_distinct(key_field.clone(), gap_ms, agg_field.clone().unwrap()),
+                other => return Err(anyhow::anyhow!(format!("unsupported ops.agg: {}", other))),
+            }
         }
         other => return Err(anyhow::anyhow!(format!("unsupported window kind: {}", other))),
     }.with_allowed_lateness(allowed_lateness_ms);
@@ -391,6 +412,101 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file(&out_path);
+    }
+
+    #[tokio::test]
+    async fn golden_tumbling_sum_file_sink() {
+        // Base fixture config
+        let mut cfg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        cfg_path.pop();
+        let pipeline_toml = cfg_path.join("pulse-tests/fixtures/simple/pipeline.toml");
+        let text = tokio::fs::read_to_string(&pipeline_toml).await.unwrap();
+        let mut cfg: pulse_core::config::PipelineConfig = toml::from_str(&text).unwrap();
+
+        // Create a temp input with numeric field 'x' per record
+        let in_path = std::env::temp_dir().join(format!(
+            "pulse_sum_in_{}.jsonl",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let content = "{\"event_time\":\"2024-01-01T00:00:00Z\",\"word\":\"a\",\"x\":1}\n{\"event_time\":\"2024-01-01T00:00:20Z\",\"word\":\"a\",\"x\":2}\n{\"event_time\":\"2024-01-01T00:00:40Z\",\"word\":\"b\",\"x\":3}\n";
+        tokio::fs::write(&in_path, content).await.unwrap();
+
+        // Tweak config: use this input, tumbling 60s sum over field x, and file sink
+        cfg.source.path = in_path.clone();
+        cfg.window.kind = "tumbling".into();
+        cfg.window.size = "60s".into();
+        cfg.ops.agg = Some("sum".into());
+        cfg.ops.agg_field = Some("x".into());
+        cfg.sink.kind = "file".into();
+        let out_path = std::env::temp_dir().join("pulse_sum_out.jsonl");
+        let _ = std::fs::remove_file(&out_path);
+        cfg.sink.out_dir = out_path.clone();
+
+        let tmp_cfg = out_path.with_file_name("pipeline.sum.temp.toml");
+        if let Some(parent) = tmp_cfg.parent() { let _ = std::fs::create_dir_all(parent); }
+        tokio::fs::write(&tmp_cfg, toml::to_string(&cfg).unwrap()).await.unwrap();
+
+        run_pipeline(tmp_cfg.clone()).await.unwrap();
+
+        let data = tokio::fs::read_to_string(&out_path).await.unwrap();
+        let lines: Vec<&str> = data.lines().collect();
+        assert_eq!(lines.len(), 2, "two keys a and b");
+        // Parse and check sums: a=3, b=3
+        let vals: Vec<serde_json::Value> = lines.iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let sum_a = vals.iter().find(|v| v["key"]=="a").unwrap()["sum"].as_f64().unwrap();
+        let sum_b = vals.iter().find(|v| v["key"]=="b").unwrap()["sum"].as_f64().unwrap();
+        assert_eq!(sum_a, 3.0);
+        assert_eq!(sum_b, 3.0);
+
+        let _ = std::fs::remove_file(&out_path);
+        let _ = std::fs::remove_file(&in_path);
+    }
+
+    #[tokio::test]
+    async fn golden_tumbling_distinct_file_sink() {
+        // Base fixture config
+        let mut cfg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        cfg_path.pop();
+        let pipeline_toml = cfg_path.join("pulse-tests/fixtures/simple/pipeline.toml");
+        let text = tokio::fs::read_to_string(&pipeline_toml).await.unwrap();
+        let mut cfg: pulse_core::config::PipelineConfig = toml::from_str(&text).unwrap();
+
+        // Temp input with field 'user'
+        let in_path = std::env::temp_dir().join(format!(
+            "pulse_distinct_in_{}.jsonl",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let content = "{\"event_time\":\"2024-01-01T00:00:00Z\",\"word\":\"a\",\"user\":\"u1\"}\n{\"event_time\":\"2024-01-01T00:00:20Z\",\"word\":\"a\",\"user\":\"u1\"}\n{\"event_time\":\"2024-01-01T00:00:40Z\",\"word\":\"b\",\"user\":\"u2\"}\n";
+        tokio::fs::write(&in_path, content).await.unwrap();
+
+        // Distinct count of user per key in tumbling 60s
+        cfg.source.path = in_path.clone();
+        cfg.window.kind = "tumbling".into();
+        cfg.window.size = "60s".into();
+        cfg.ops.agg = Some("distinct".into());
+        cfg.ops.agg_field = Some("user".into());
+        cfg.sink.kind = "file".into();
+        let out_path = std::env::temp_dir().join("pulse_distinct_out.jsonl");
+        let _ = std::fs::remove_file(&out_path);
+        cfg.sink.out_dir = out_path.clone();
+
+        let tmp_cfg = out_path.with_file_name("pipeline.distinct.temp.toml");
+        if let Some(parent) = tmp_cfg.parent() { let _ = std::fs::create_dir_all(parent); }
+        tokio::fs::write(&tmp_cfg, toml::to_string(&cfg).unwrap()).await.unwrap();
+
+        run_pipeline(tmp_cfg.clone()).await.unwrap();
+
+        let data = tokio::fs::read_to_string(&out_path).await.unwrap();
+        let lines: Vec<&str> = data.lines().collect();
+        assert_eq!(lines.len(), 2, "duas chaves a e b");
+        let vals: Vec<serde_json::Value> = lines.iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let d_a = vals.iter().find(|v| v["key"]=="a").unwrap()["distinct_count"].as_i64().unwrap();
+        let d_b = vals.iter().find(|v| v["key"]=="b").unwrap()["distinct_count"].as_i64().unwrap();
+        assert_eq!(d_a, 1);
+        assert_eq!(d_b, 1);
+
+        let _ = std::fs::remove_file(&out_path);
+        let _ = std::fs::remove_file(&in_path);
     }
 
 }
