@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="Pulse logo" width="720" />
+  <img src="logo.png" alt="Pulse logo" width="240" />
 </p>
 
 # Pulse
