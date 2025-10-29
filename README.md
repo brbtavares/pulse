@@ -62,7 +62,7 @@ Semantics overview:
 
 ### Windowing
 - Operators: `WindowedAggregate` supports Tumbling/Sliding/Session
-- The CLI supports tumbling, sliding, and session for count-by-key
+- The CLI supports tumbling, sliding, and session with aggregations: `count`, `sum`, `avg`, `distinct`
 - EOF watermark emitted by `FileSource` flushes windows
 
 ### State & snapshots
@@ -80,9 +80,8 @@ Semantics overview:
 ### Limitations (MVP)
 
 - No cluster/distributed runtime yet (single process, single binary).
-- No SQL/DSL planner; define pipelines in Rust or with the minimal TOML config.
-- CLI wires tumbling count-by-key today; other window kinds/aggregations available via the Rust API.
-- Checkpoint/resume orchestration is minimal: offsets/snapshots exist, but full recovery wiring is a follow-up.
+- No SQL/DSL planner; define pipelines in Rust or via TOML.
+- Checkpoint/resume orchestration is minimal: offsets/snapshots exist, but full CLI-driven recovery is a follow-up.
 - Kafka is optional and depends on native `librdkafka`.
 
 ### I/O
@@ -141,8 +140,10 @@ size = "60s"
 slide = "15s"   # for sliding; for session, use: gap = "30s"
 
 [ops]
-# simple aggregation list; currently: count_by
+# aggregation over a key; supported: count (default), sum, avg, distinct
 count_by = "word"
+# agg = "count"          # default
+# agg_field = "value"     # obrigatório para sum|avg|distinct
 
 [sink]
 kind = "parquet"
@@ -208,6 +209,31 @@ async fn main() -> anyhow::Result<()> {
   exec.run().await?;
   Ok(())
 }
+```
+
+### Examples: other aggregations in the CLI
+
+```toml
+[source]
+kind = "file"
+path = "pulse-examples/examples/sliding_avg.jsonl"
+time_field = "event_time"
+
+[time]
+allowed_lateness = "10s"
+
+[window]
+type = "tumbling"
+size = "60s"
+
+[ops]
+count_by = "word"
+agg = "avg"         # or: sum | distinct | count
+agg_field = "score" # required for avg/sum/distinct
+
+[sink]
+kind = "parquet"
+out_dir = "outputs"
 ```
 
 ### Examples crate

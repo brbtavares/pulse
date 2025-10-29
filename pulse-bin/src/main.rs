@@ -498,7 +498,7 @@ mod tests {
 
         let data = tokio::fs::read_to_string(&out_path).await.unwrap();
         let lines: Vec<&str> = data.lines().collect();
-        assert_eq!(lines.len(), 2, "duas chaves a e b");
+    assert_eq!(lines.len(), 2, "two keys a and b");
         let vals: Vec<serde_json::Value> = lines.iter().map(|l| serde_json::from_str(l).unwrap()).collect();
         let d_a = vals.iter().find(|v| v["key"]=="a").unwrap()["distinct_count"].as_i64().unwrap();
         let d_b = vals.iter().find(|v| v["key"]=="b").unwrap()["distinct_count"].as_i64().unwrap();
