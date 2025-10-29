@@ -98,7 +98,13 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
     // Build source based on kind
     #[allow(unused_mut)]
     let src: Box<dyn pulse_core::Source> = match cfg.source.kind.as_str() {
-        "file" => Box::new(pulse_io::FileSource::jsonl(cfg.source.path.to_string_lossy(), cfg.source.time_field.clone())),
+        "file" => {
+            match cfg.source.format.as_deref().unwrap_or("jsonl") {
+                "jsonl" => Box::new(pulse_io::FileSource::jsonl(cfg.source.path.to_string_lossy(), cfg.source.time_field.clone())),
+                "csv" => Box::new(pulse_io::FileSource { path: cfg.source.path.to_string_lossy().to_string(), format: pulse_io::FileFormat::Csv, event_time_field: cfg.source.time_field.clone(), text_field: None }),
+                other => return Err(anyhow::anyhow!(format!("unsupported source.format: {}", other))),
+            }
+        }
     #[cfg(feature = "kafka")]
         "kafka" => {
             let mut s = pulse_io::KafkaSource::new(
@@ -504,6 +510,55 @@ mod tests {
         let d_b = vals.iter().find(|v| v["key"]=="b").unwrap()["distinct_count"].as_i64().unwrap();
         assert_eq!(d_a, 1);
         assert_eq!(d_b, 1);
+
+        let _ = std::fs::remove_file(&out_path);
+        let _ = std::fs::remove_file(&in_path);
+    }
+
+    #[tokio::test]
+    async fn csv_source_tumbling_count_file_sink() {
+        // Base fixture config
+        let mut cfg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        cfg_path.pop();
+        let pipeline_toml = cfg_path.join("pulse-tests/fixtures/simple/pipeline.toml");
+        let text = tokio::fs::read_to_string(&pipeline_toml).await.unwrap();
+        let mut cfg: pulse_core::config::PipelineConfig = toml::from_str(&text).unwrap();
+
+        // Create a temporary CSV with epoch-ms event_time and a key column
+        let in_path = std::env::temp_dir().join(format!(
+            "pulse_csv_in_{}.csv",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let csv_data = "event_time,word\n1704067200000,a\n1704067220000,a\n1704067240000,b\n";
+        tokio::fs::write(&in_path, csv_data).await.unwrap();
+
+        // Configure CSV source + tumbling count + file sink
+        cfg.source.path = in_path.clone();
+        cfg.source.format = Some("csv".into());
+        cfg.source.time_field = "event_time".into();
+        cfg.window.kind = "tumbling".into();
+        cfg.window.size = "60s".into();
+        cfg.ops.agg = Some("count".into());
+        cfg.sink.kind = "file".into();
+        let out_path = std::env::temp_dir().join("pulse_csv_out.jsonl");
+        let _ = std::fs::remove_file(&out_path);
+        cfg.sink.out_dir = out_path.clone();
+
+        let tmp_cfg = out_path.with_file_name("pipeline.csv.temp.toml");
+        if let Some(parent) = tmp_cfg.parent() { let _ = std::fs::create_dir_all(parent); }
+        tokio::fs::write(&tmp_cfg, toml::to_string(&cfg).unwrap()).await.unwrap();
+
+        run_pipeline(tmp_cfg.clone()).await.unwrap();
+
+        // Should produce two rows: a (count=2) and b (count=1)
+        let data = tokio::fs::read_to_string(&out_path).await.unwrap();
+        let lines: Vec<&str> = data.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let vals: Vec<serde_json::Value> = lines.iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let c_a = vals.iter().find(|v| v["key"]=="a").unwrap()["count"].as_i64().unwrap();
+        let c_b = vals.iter().find(|v| v["key"]=="b").unwrap()["count"].as_i64().unwrap();
+        assert_eq!(c_a, 2);
+        assert_eq!(c_b, 1);
 
         let _ = std::fs::remove_file(&out_path);
         let _ = std::fs::remove_file(&in_path);

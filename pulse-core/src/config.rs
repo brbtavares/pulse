@@ -6,6 +6,8 @@ pub struct SourceConfig {
     pub kind: String,           // "file"
     pub path: PathBuf,          // path to file
     pub time_field: String,     // e.g., "event_time" or "ts"
+    #[serde(default)]
+    pub format: Option<String>, // "jsonl" | "csv" (file source)
     // Kafka-specific (used when kind=="kafka")
     #[serde(default)]
     pub bootstrap_servers: Option<String>,
@@ -85,6 +87,12 @@ impl PipelineConfig {
             "file" => {
                 if self.source.path.as_os_str().is_empty() {
                     anyhow::bail!("source.path must be set for file source");
+                }
+                if let Some(fmt) = self.source.format.as_deref() {
+                    match fmt {
+                        "jsonl" | "csv" => {}
+                        other => anyhow::bail!("unsupported source.format: {}", other),
+                    }
                 }
             }
             "kafka" => {
@@ -170,6 +178,7 @@ mod tests {
                 kind: "file".into(),
                 path: PathBuf::from("/tmp/input.jsonl"),
                 time_field: "event_time".into(),
+                format: None,
                 bootstrap_servers: None,
                 topic: None,
                 group_id: None,
@@ -191,6 +200,7 @@ mod tests {
                 kind: "kafka".into(),
                 path: PathBuf::from("unused"),
                 time_field: "event_time".into(),
+                format: None,
                 bootstrap_servers: Some("localhost:9092".into()),
                 topic: Some("t".into()),
                 group_id: Some("g".into()),
@@ -208,7 +218,7 @@ mod tests {
     #[test]
     fn validate_missing_ops_count_by_errors() {
         let cfg = PipelineConfig {
-            source: SourceConfig { kind: "file".into(), path: PathBuf::from("/tmp/in"), time_field: "ts".into(), bootstrap_servers: None, topic: None, group_id: None, auto_offset_reset: None, commit_interval_ms: None },
+            source: SourceConfig { kind: "file".into(), path: PathBuf::from("/tmp/in"), time_field: "ts".into(), format: None, bootstrap_servers: None, topic: None, group_id: None, auto_offset_reset: None, commit_interval_ms: None },
             time: TimeConfig { allowed_lateness: "0s".into() },
             window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
             ops: OpsConfig { count_by: None, ..Default::default() },

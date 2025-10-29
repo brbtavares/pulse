@@ -178,13 +178,33 @@ Expected output:
 
 ### Example: CSV → Parquet
 
-CLI currently expects JSONL for file inputs. CSV is supported at the library level. Two options:
+CLI supports JSONL and CSV via `source.format`.
 
-1) Convert CSV to JSONL (quickest for CLI):
-   - Ensure your CSV has `event_time` column as epoch ms.
-   - Convert to JSONL (one JSON object per line) and use the file example above.
+1) Direct CSV in the CLI:
 
-2) Use the Rust API to run CSV directly:
+```toml
+[source]
+kind = "file"
+format = "csv"               # jsonl | csv
+path = "input.csv"
+time_field = "event_time"    # epoch ms in CSV
+
+[time]
+allowed_lateness = "10s"
+
+[window]
+type = "tumbling"
+size = "60s"
+
+[ops]
+count_by = "word"
+
+[sink]
+kind = "parquet"
+out_dir = "outputs"
+```
+
+2) Use the Rust API directly:
 
 ```rust
 use pulse_core::Executor;
