@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
 use pulse_core::KvState;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum WindowAssigner {
@@ -31,11 +31,11 @@ impl WindowAssigner {
                 let epoch = DateTime::<Utc>::from_timestamp(0, 0).unwrap();
                 let since = ts - epoch;
                 let k = (size.num_milliseconds() / slide.num_milliseconds()) as i64;
-                let anchor_ms = (since.num_milliseconds() / slide.num_milliseconds()) * slide.num_milliseconds();
+                let anchor_ms =
+                    (since.num_milliseconds() / slide.num_milliseconds()) * slide.num_milliseconds();
                 let mut out = Vec::new();
                 for j in 0..k {
-                    let start = epoch
-                        + Duration::milliseconds(anchor_ms - j * slide.num_milliseconds());
+                    let start = epoch + Duration::milliseconds(anchor_ms - j * slide.num_milliseconds());
                     let end = start + size;
                     if start <= ts && ts < end {
                         out.push(Window { start, end });
@@ -166,7 +166,9 @@ mod persist_tests {
 
     #[tokio::test]
     async fn window_state_persists_and_restores() {
-        let assigner = WindowAssigner::Tumbling { size: Duration::seconds(60) };
+        let assigner = WindowAssigner::Tumbling {
+            size: Duration::seconds(60),
+        };
         let backend = Arc::new(InMemoryState::default());
         // instance 1 processes some data
         let mut op1 = WindowOperator::new(assigner, || 0i64, |s, v| *s += v["n"].as_i64().unwrap_or(0))
@@ -194,7 +196,9 @@ mod tests {
 
     #[test]
     fn tumbling_emits_on_watermark_with_lateness() {
-        let assigner = WindowAssigner::Tumbling { size: Duration::seconds(60) };
+        let assigner = WindowAssigner::Tumbling {
+            size: Duration::seconds(60),
+        };
         let mut op = WindowOperator::new(assigner, || 0i64, |s, v| *s += v["n"].as_i64().unwrap_or(0));
 
         let t0 = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
@@ -204,7 +208,7 @@ mod tests {
         op.on_element(t0, &serde_json::json!({"n": 1}));
         op.on_element(t1, &serde_json::json!({"n": 2}));
         // watermark at end of first window should emit first window only
-    let wm1 = t0 + Duration::seconds(60);
+        let wm1 = t0 + Duration::seconds(60);
         let out1 = op.on_watermark(wm1);
         assert_eq!(out1.len(), 1);
         assert_eq!(out1[0].1, 3);
@@ -218,7 +222,10 @@ mod tests {
 
     #[test]
     fn sliding_emits_multiple_overlaps() {
-        let assigner = WindowAssigner::Sliding { size: Duration::seconds(60), slide: Duration::seconds(15) };
+        let assigner = WindowAssigner::Sliding {
+            size: Duration::seconds(60),
+            slide: Duration::seconds(15),
+        };
         let mut op = WindowOperator::new(assigner, || 0i64, |s, v| *s += v["n"].as_i64().unwrap_or(0));
 
         let base = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
@@ -235,7 +242,9 @@ mod tests {
 
     #[test]
     fn out_of_order_data_waits_until_watermark() {
-        let assigner = WindowAssigner::Tumbling { size: Duration::seconds(60) };
+        let assigner = WindowAssigner::Tumbling {
+            size: Duration::seconds(60),
+        };
         let mut op = WindowOperator::new(assigner, || 0i64, |s, v| *s += v["n"].as_i64().unwrap_or(0));
         let base = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
         let late = base + Duration::seconds(10);

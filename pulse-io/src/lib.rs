@@ -3,8 +3,8 @@
 //! - `FileSink`: writes JSON lines to stdout or a file
 
 use async_trait::async_trait;
+use chrono::{DateTime, TimeZone, Utc};
 use pulse_core::{Context, EventTime, Record, Result, Sink, Source};
-use chrono::{DateTime, Utc, TimeZone};
 use tokio::io::AsyncBufReadExt;
 
 #[derive(Clone)]
@@ -50,11 +50,14 @@ impl Source for FileSource {
                         serde_json::Value::Number(n) => {
                             // assume ms epoch
                             let ms = n.as_i64().unwrap_or(0);
-                            DateTime::<Utc>::from_timestamp_millis(ms).unwrap_or_else(|| Utc.timestamp_millis_opt(0).unwrap())
+                            DateTime::<Utc>::from_timestamp_millis(ms)
+                                .unwrap_or_else(|| Utc.timestamp_millis_opt(0).unwrap())
                         }
                         serde_json::Value::String(s) => {
                             // parse RFC3339
-                            DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&Utc)).unwrap_or_else(|_| Utc.timestamp_millis_opt(0).unwrap())
+                            DateTime::parse_from_rfc3339(&s)
+                                .map(|t| t.with_timezone(&Utc))
+                                .unwrap_or_else(|_| Utc.timestamp_millis_opt(0).unwrap())
                         }
                         _ => Utc.timestamp_millis_opt(0).unwrap(),
                     };
@@ -131,7 +134,9 @@ impl Sink for FileSink {
                 .await?;
             f.write_all(line.as_bytes()).await?;
             f.write_all(b"\n").await?;
-            pulse_core::metrics::BYTES_WRITTEN.with_label_values(&["FileSink"]).inc_by((line.len() + 1) as u64);
+            pulse_core::metrics::BYTES_WRITTEN
+                .with_label_values(&["FileSink"])
+                .inc_by((line.len() + 1) as u64);
         } else {
             println!("{}", line);
         }
@@ -155,8 +160,13 @@ mod kafka {
 
     pub(crate) fn extract_event_time(v: &serde_json::Value, field: &str) -> chrono::DateTime<chrono::Utc> {
         match v.get(field).cloned().unwrap_or(serde_json::Value::Null) {
-            serde_json::Value::Number(n) => chrono::DateTime::<chrono::Utc>::from_timestamp_millis(n.as_i64().unwrap_or(0)).unwrap_or_else(|| chrono::Utc.timestamp_millis_opt(0).unwrap()),
-            serde_json::Value::String(s) => chrono::DateTime::parse_from_rfc3339(&s).map(|t| t.with_timezone(&chrono::Utc)).unwrap_or_else(|_| chrono::Utc.timestamp_millis_opt(0).unwrap()),
+            serde_json::Value::Number(n) => {
+                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(n.as_i64().unwrap_or(0))
+                    .unwrap_or_else(|| chrono::Utc.timestamp_millis_opt(0).unwrap())
+            }
+            serde_json::Value::String(s) => chrono::DateTime::parse_from_rfc3339(&s)
+                .map(|t| t.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc.timestamp_millis_opt(0).unwrap()),
             _ => chrono::Utc.timestamp_millis_opt(0).unwrap(),
         }
     }
@@ -225,11 +235,11 @@ mod kafka {
                 .set("enable.partition.eof", "false")
                 .set("enable.auto.commit", "false")
                 .set("session.timeout.ms", "10000");
-            if let Some(r) = &self.auto_offset_reset { cfg.set("auto.offset.reset", r); }
+            if let Some(r) = &self.auto_offset_reset {
+                cfg.set("auto.offset.reset", r);
+            }
 
-            let consumer: StreamConsumer = cfg
-                .create()
-                .context("failed to create kafka consumer")?;
+            let consumer: StreamConsumer = cfg.create().context("failed to create kafka consumer")?;
 
             // Determine partitions and starting offsets from KvState (resume) or fallback policy
             let md = consumer
@@ -249,7 +259,11 @@ mod kafka {
                 let start_off = if let Some(bytes) = stored {
                     // resume from last committed + 1 to avoid duplicates beyond at-least-once
                     let s = String::from_utf8_lossy(&bytes);
-                    if let Ok(o) = s.parse::<i64>() { Offset::Offset(o + 1) } else { Offset::Beginning }
+                    if let Ok(o) = s.parse::<i64>() {
+                        Offset::Offset(o + 1)
+                    } else {
+                        Offset::Beginning
+                    }
                 } else {
                     match self.auto_offset_reset.as_deref() {
                         Some("earliest") => Offset::Beginning,
@@ -275,7 +289,10 @@ mod kafka {
                                 obj.insert("_partition".into(), serde_json::json!(m.partition()));
                                 obj.insert("_offset".into(), serde_json::json!(m.offset()));
                             }
-                            ctx.collect(Record { event_time: ts, value: v });
+                            ctx.collect(Record {
+                                event_time: ts,
+                                value: v,
+                            });
 
                             // Track current offset and persist periodically for checkpoints
                             let part = m.partition();
@@ -311,14 +328,25 @@ mod kafka {
 
     impl KafkaSink {
         pub fn new(brokers: impl Into<String>, topic: impl Into<String>) -> Self {
-            Self { brokers: brokers.into(), topic: topic.into(), acks: Some("all".into()), key_field: None, producer: None }
+            Self {
+                brokers: brokers.into(),
+                topic: topic.into(),
+                acks: Some("all".into()),
+                key_field: None,
+                producer: None,
+            }
         }
-        pub fn with_key_field(mut self, key_field: impl Into<String>) -> Self { self.key_field = Some(key_field.into()); self }
+        pub fn with_key_field(mut self, key_field: impl Into<String>) -> Self {
+            self.key_field = Some(key_field.into());
+            self
+        }
         fn ensure_producer(&mut self) -> anyhow::Result<()> {
             if self.producer.is_none() {
                 let mut cfg = ClientConfig::new();
                 cfg.set("bootstrap.servers", &self.brokers);
-                if let Some(a) = &self.acks { cfg.set("acks", a); }
+                if let Some(a) = &self.acks {
+                    cfg.set("acks", a);
+                }
                 self.producer = Some(cfg.create().context("failed to create kafka producer")?);
             }
             Ok(())
@@ -331,11 +359,22 @@ mod kafka {
             self.ensure_producer().map_err(|e| Error::Anyhow(e.into()))?;
             let producer = self.producer.as_ref().unwrap();
             let payload = serde_json::to_string(&record.value)?;
-            let key = self.key_field.as_ref().and_then(|k| record.value.get(k).and_then(|v| v.as_str()).map(|s| s.to_string()))
+            let key = self
+                .key_field
+                .as_ref()
+                .and_then(|k| {
+                    record
+                        .value
+                        .get(k)
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
                 .unwrap_or_default();
             // Respect backpressure by awaiting the send future; mirrors ParquetSink's per-record write
             let mut fr = FutureRecord::to(&self.topic).payload(&payload);
-            if !key.is_empty() { fr = fr.key(&key); }
+            if !key.is_empty() {
+                fr = fr.key(&key);
+            }
             let _ = producer.send(fr, std::time::Duration::from_secs(5)).await;
             Ok(())
         }
@@ -347,9 +386,9 @@ pub use kafka::{KafkaSink, KafkaSource};
 
 #[cfg(all(test, feature = "kafka"))]
 mod kafka_tests {
+    use super::kafka::KafkaSource;
     use super::kafka::{extract_event_time, parse_payload_to_value};
     use chrono::{TimeZone, Utc};
-    use super::kafka::KafkaSource;
 
     #[test]
     fn payload_json_decodes() {
@@ -377,7 +416,7 @@ mod kafka_tests {
 
         let v_str = serde_json::json!({"ts": "2023-12-01T00:00:00Z"});
         let dt2 = extract_event_time(&v_str, "ts");
-        assert_eq!(dt2, Utc.with_ymd_and_hms(2023,12,1,0,0,0).unwrap());
+        assert_eq!(dt2, Utc.with_ymd_and_hms(2023, 12, 1, 0, 0, 0).unwrap());
     }
 
     #[test]
@@ -553,17 +592,35 @@ mod tests {
         tokio::fs::write(&path, content).await.unwrap();
 
         // Custom ctx capturing watermark calls
-        struct WmCtx { saw_wm: bool, out: Vec<Record>, kv: Arc<dyn KvState>, timers: Arc<dyn Timers> }
+        struct WmCtx {
+            saw_wm: bool,
+            out: Vec<Record>,
+            kv: Arc<dyn KvState>,
+            timers: Arc<dyn Timers>,
+        }
         #[async_trait]
         impl Context for WmCtx {
-            fn collect(&mut self, record: Record) { self.out.push(record); }
-            fn watermark(&mut self, _wm: Watermark) { self.saw_wm = true; }
-            fn kv(&self) -> Arc<dyn KvState> { self.kv.clone() }
-            fn timers(&self) -> Arc<dyn Timers> { self.timers.clone() }
+            fn collect(&mut self, record: Record) {
+                self.out.push(record);
+            }
+            fn watermark(&mut self, _wm: Watermark) {
+                self.saw_wm = true;
+            }
+            fn kv(&self) -> Arc<dyn KvState> {
+                self.kv.clone()
+            }
+            fn timers(&self) -> Arc<dyn Timers> {
+                self.timers.clone()
+            }
         }
 
         let mut src = FileSource::jsonl(&path, "event_time");
-        let mut ctx = WmCtx { saw_wm: false, out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        let mut ctx = WmCtx {
+            saw_wm: false,
+            out: vec![],
+            kv: Arc::new(TestState),
+            timers: Arc::new(TestTimers),
+        };
         src.run(&mut ctx).await.unwrap();
         assert_eq!(ctx.out.len(), 1);
         assert!(ctx.saw_wm, "EOF watermark not emitted by FileSource");

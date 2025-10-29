@@ -36,8 +36,7 @@ impl WatermarkClock {
     }
 
     pub fn watermark(&self) -> Option<DateTime<Utc>> {
-        self.max_observed
-            .map(|t| t - self.policy.allowed_lateness)
+        self.max_observed.map(|t| t - self.policy.allowed_lateness)
     }
 }
 

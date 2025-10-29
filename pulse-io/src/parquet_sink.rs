@@ -39,7 +39,10 @@ impl Default for ParquetSinkConfig {
     fn default() -> Self {
         Self {
             out_dir: PathBuf::from("./out"),
-            partition_by: PartitionSpec::ByDate { field: "event_time".into(), fmt: "%Y-%m-%d".into() },
+            partition_by: PartitionSpec::ByDate {
+                field: "event_time".into(),
+                fmt: "%Y-%m-%d".into(),
+            },
             max_rows: 100_000,
             max_age: Duration::from_secs(60),
             compression: Some("snappy".into()),
@@ -67,11 +70,20 @@ pub struct ParquetSink {
 impl ParquetSink {
     pub fn new(cfg: ParquetSinkConfig) -> Self {
         let fields = vec![
-            Field::new("event_time", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+            Field::new(
+                "event_time",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
             Field::new("payload", DataType::Utf8, false),
         ];
         let schema = std::sync::Arc::new(Schema::new(fields));
-        Self { cfg, current_part: None, active: None, schema }
+        Self {
+            cfg,
+            current_part: None,
+            active: None,
+            schema,
+        }
     }
 
     fn partition_value(&self, rec: &Record) -> String {
@@ -123,24 +135,46 @@ impl ParquetSink {
         if let Some(active) = &self.active {
             let by_rows = active.rows >= self.cfg.max_rows;
             let by_age = active.started.elapsed() >= self.cfg.max_age;
-            let by_bytes = self.cfg.max_bytes.map(|b| active.approx_bytes >= b).unwrap_or(false);
+            let by_bytes = self
+                .cfg
+                .max_bytes
+                .map(|b| active.approx_bytes >= b)
+                .unwrap_or(false);
             by_rows || by_age || by_bytes
         } else {
             true
         }
     }
 
-    fn new_writer(path: &Path, schema: std::sync::Arc<Schema>, compression: Option<&str>) -> Result<ActiveFile> {
+    fn new_writer(
+        path: &Path,
+        schema: std::sync::Arc<Schema>,
+        compression: Option<&str>,
+    ) -> Result<ActiveFile> {
         let file = std::fs::File::create(path)?;
         let mut builder = WriterProperties::builder();
         match compression.unwrap_or("snappy").to_lowercase().as_str() {
-            "snappy" => { builder = builder.set_compression(parquet::basic::Compression::SNAPPY); }
-            "zstd" => { builder = builder.set_compression(parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default())); }
-            _ => { builder = builder.set_compression(parquet::basic::Compression::UNCOMPRESSED); }
+            "snappy" => {
+                builder = builder.set_compression(parquet::basic::Compression::SNAPPY);
+            }
+            "zstd" => {
+                builder = builder.set_compression(parquet::basic::Compression::ZSTD(
+                    parquet::basic::ZstdLevel::default(),
+                ));
+            }
+            _ => {
+                builder = builder.set_compression(parquet::basic::Compression::UNCOMPRESSED);
+            }
         }
         let props = builder.build();
         let writer = ArrowWriter::try_new(file, schema, Some(props)).map_err(|e| anyhow::anyhow!(e))?;
-        Ok(ActiveFile { writer, started: Instant::now(), rows: 0, path: path.to_path_buf(), approx_bytes: 0 })
+        Ok(ActiveFile {
+            writer,
+            started: Instant::now(),
+            rows: 0,
+            path: path.to_path_buf(),
+            approx_bytes: 0,
+        })
     }
 
     fn open_partition(&mut self, part: &str) -> Result<()> {
@@ -154,7 +188,11 @@ impl ParquetSink {
             std::fs::create_dir_all(&dir)?;
             let fname = format!("part-{}.parquet", chrono::Utc::now().timestamp_millis());
             let path = dir.join(fname);
-            self.active = Some(Self::new_writer(&path, self.schema.clone(), self.cfg.compression.as_deref())?);
+            self.active = Some(Self::new_writer(
+                &path,
+                self.schema.clone(),
+                self.cfg.compression.as_deref(),
+            )?);
             self.current_part = Some(part.to_string());
         }
         Ok(())
@@ -181,7 +219,11 @@ impl Sink for ParquetSink {
                 let dir = self.cfg.out_dir.join(format!("dt={}", p));
                 let fname = format!("part-{}.parquet", chrono::Utc::now().timestamp_millis());
                 let path = dir.join(fname);
-                self.active = Some(Self::new_writer(&path, self.schema.clone(), self.cfg.compression.as_deref())?);
+                self.active = Some(Self::new_writer(
+                    &path,
+                    self.schema.clone(),
+                    self.cfg.compression.as_deref(),
+                )?);
             }
         }
         // For simplicity, write record-by-record as single-row batches.
@@ -190,7 +232,11 @@ impl Sink for ParquetSink {
             active.writer.write(&batch).map_err(|e| anyhow::anyhow!(e))?;
             active.rows += 1;
             // Roughly estimate bytes as payload string + fixed overhead; for simplicity, use JSON length
-            if let Some(s) = record.value.as_str() { active.approx_bytes += s.len(); } else { active.approx_bytes += serde_json::to_string(&record.value)?.len(); }
+            if let Some(s) = record.value.as_str() {
+                active.approx_bytes += s.len();
+            } else {
+                active.approx_bytes += serde_json::to_string(&record.value)?.len();
+            }
         }
         Ok(())
     }
@@ -215,7 +261,10 @@ mod tests {
 
     fn tmp_dir(prefix: &str) -> PathBuf {
         let mut d = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         d.push(format!("pulse_parquet_test_{}_{}", prefix, nanos));
         d
     }
@@ -223,13 +272,26 @@ mod tests {
     #[tokio::test]
     async fn writes_and_reads_back() {
         let out_dir = tmp_dir("parquet");
-    let cfg = ParquetSinkConfig { out_dir: out_dir.clone(), partition_by: PartitionSpec::ByDate { field: "event_time".into(), fmt: "%Y-%m-%d".into() }, max_rows: 10, max_age: Duration::from_secs(60), compression: Some("snappy".into()), max_bytes: None };
+        let cfg = ParquetSinkConfig {
+            out_dir: out_dir.clone(),
+            partition_by: PartitionSpec::ByDate {
+                field: "event_time".into(),
+                fmt: "%Y-%m-%d".into(),
+            },
+            max_rows: 10,
+            max_age: Duration::from_secs(60),
+            compression: Some("snappy".into()),
+            max_bytes: None,
+        };
         let mut sink = ParquetSink::new(cfg);
 
         // Write 3 records on same day
         let ts = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
         for i in 0..3 {
-            let rec = Record { event_time: ts, value: serde_json::json!({"n": i, "s": format!("v{}", i)}) };
+            let rec = Record {
+                event_time: ts,
+                value: serde_json::json!({"n": i, "s": format!("v{}", i)}),
+            };
             sink.on_element(rec).await.unwrap();
         }
         // Close current writer explicitly by simulating rotation

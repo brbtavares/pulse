@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SourceConfig {
-    pub kind: String,           // "file"
-    pub path: PathBuf,          // path to file
-    pub time_field: String,     // e.g., "event_time" or "ts"
+    pub kind: String,       // "file"
+    pub path: PathBuf,      // path to file
+    pub time_field: String, // e.g., "event_time" or "ts"
     #[serde(default)]
     pub format: Option<String>, // "jsonl" | "csv" (file source)
     // Kafka-specific (used when kind=="kafka")
@@ -51,7 +51,7 @@ pub struct OpsConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SinkConfig {
-    pub kind: String,     // "parquet" | "file" | "kafka"
+    pub kind: String, // "parquet" | "file" | "kafka"
     #[serde(default)]
     pub out_dir: PathBuf, // for parquet or file path for file sink
     // Kafka-specific (when kind=="kafka")
@@ -185,10 +185,30 @@ mod tests {
                 auto_offset_reset: None,
                 commit_interval_ms: None,
             },
-            time: TimeConfig { allowed_lateness: "0s".into() },
-            window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
-            ops: OpsConfig { count_by: Some("word".into()), ..Default::default() },
-            sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None, compression: None, max_bytes: None, partition_field: None, partition_format: None },
+            time: TimeConfig {
+                allowed_lateness: "0s".into(),
+            },
+            window: WindowConfig {
+                kind: "tumbling".into(),
+                size: "60s".into(),
+                slide: None,
+                gap: None,
+            },
+            ops: OpsConfig {
+                count_by: Some("word".into()),
+                ..Default::default()
+            },
+            sink: SinkConfig {
+                kind: "parquet".into(),
+                out_dir: PathBuf::from("/tmp/out"),
+                bootstrap_servers: None,
+                topic: None,
+                acks: None,
+                compression: None,
+                max_bytes: None,
+                partition_field: None,
+                partition_format: None,
+            },
         };
         cfg.validate().unwrap();
     }
@@ -207,10 +227,30 @@ mod tests {
                 auto_offset_reset: Some("earliest".into()),
                 commit_interval_ms: Some(1000),
             },
-            time: TimeConfig { allowed_lateness: "5s".into() },
-            window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
-            ops: OpsConfig { count_by: Some("word".into()), ..Default::default() },
-            sink: SinkConfig { kind: "kafka".into(), out_dir: PathBuf::from("./out"), bootstrap_servers: Some("localhost:9092".into()), topic: Some("t2".into()), acks: Some("all".into()), compression: None, max_bytes: None, partition_field: None, partition_format: None },
+            time: TimeConfig {
+                allowed_lateness: "5s".into(),
+            },
+            window: WindowConfig {
+                kind: "tumbling".into(),
+                size: "60s".into(),
+                slide: None,
+                gap: None,
+            },
+            ops: OpsConfig {
+                count_by: Some("word".into()),
+                ..Default::default()
+            },
+            sink: SinkConfig {
+                kind: "kafka".into(),
+                out_dir: PathBuf::from("./out"),
+                bootstrap_servers: Some("localhost:9092".into()),
+                topic: Some("t2".into()),
+                acks: Some("all".into()),
+                compression: None,
+                max_bytes: None,
+                partition_field: None,
+                partition_format: None,
+            },
         };
         cfg.validate().unwrap();
     }
@@ -218,11 +258,41 @@ mod tests {
     #[test]
     fn validate_missing_ops_count_by_errors() {
         let cfg = PipelineConfig {
-            source: SourceConfig { kind: "file".into(), path: PathBuf::from("/tmp/in"), time_field: "ts".into(), format: None, bootstrap_servers: None, topic: None, group_id: None, auto_offset_reset: None, commit_interval_ms: None },
-            time: TimeConfig { allowed_lateness: "0s".into() },
-            window: WindowConfig { kind: "tumbling".into(), size: "60s".into(), slide: None, gap: None },
-            ops: OpsConfig { count_by: None, ..Default::default() },
-            sink: SinkConfig { kind: "parquet".into(), out_dir: PathBuf::from("/tmp/out"), bootstrap_servers: None, topic: None, acks: None, compression: None, max_bytes: None, partition_field: None, partition_format: None },
+            source: SourceConfig {
+                kind: "file".into(),
+                path: PathBuf::from("/tmp/in"),
+                time_field: "ts".into(),
+                format: None,
+                bootstrap_servers: None,
+                topic: None,
+                group_id: None,
+                auto_offset_reset: None,
+                commit_interval_ms: None,
+            },
+            time: TimeConfig {
+                allowed_lateness: "0s".into(),
+            },
+            window: WindowConfig {
+                kind: "tumbling".into(),
+                size: "60s".into(),
+                slide: None,
+                gap: None,
+            },
+            ops: OpsConfig {
+                count_by: None,
+                ..Default::default()
+            },
+            sink: SinkConfig {
+                kind: "parquet".into(),
+                out_dir: PathBuf::from("/tmp/out"),
+                bootstrap_servers: None,
+                topic: None,
+                acks: None,
+                compression: None,
+                max_bytes: None,
+                partition_field: None,
+                partition_format: None,
+            },
         };
         assert!(cfg.validate().is_err());
     }

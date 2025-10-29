@@ -47,20 +47,20 @@
 //! }
 //! ```
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 pub mod checkpoint;
 pub use checkpoint::{CheckpointMeta, SnapshotId};
 
 pub mod record;
 pub use record::Record;
-pub mod metrics;
 pub mod config;
+pub mod metrics;
 
 /// Logical event-time as wall-clock timestamp in UTC.
 /// Use [`EventTime::now`] for current time.
@@ -176,7 +176,10 @@ pub struct SimpleInMemoryState(Arc<Mutex<SimpleStateInner>>);
 
 impl Default for SimpleInMemoryState {
     fn default() -> Self {
-        Self(Arc::new(Mutex::new(SimpleStateInner { map: Default::default(), snapshots: Default::default() })))
+        Self(Arc::new(Mutex::new(SimpleStateInner {
+            map: Default::default(),
+            snapshots: Default::default(),
+        })))
     }
 }
 
@@ -188,13 +191,17 @@ impl KvState for SimpleInMemoryState {
     async fn put(&self, key: &[u8], value: Vec<u8>) -> Result<()> {
         self.0.lock().map.insert(key.to_vec(), value);
         let sz = self.0.lock().map.len() as i64;
-        metrics::STATE_SIZE.with_label_values(&["SimpleInMemoryState"]).set(sz);
+        metrics::STATE_SIZE
+            .with_label_values(&["SimpleInMemoryState"])
+            .set(sz);
         Ok(())
     }
     async fn delete(&self, key: &[u8]) -> Result<()> {
         self.0.lock().map.remove(key);
         let sz = self.0.lock().map.len() as i64;
-        metrics::STATE_SIZE.with_label_values(&["SimpleInMemoryState"]).set(sz);
+        metrics::STATE_SIZE
+            .with_label_values(&["SimpleInMemoryState"])
+            .set(sz);
         Ok(())
     }
     async fn iter_prefix(&self, prefix: Option<&[u8]>) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
@@ -322,11 +329,14 @@ impl Executor {
             Data(Record),
             Wm(Watermark),
         }
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<EventMsg>();
-    // Soft-bound drop policy controlled by env PULSE_CHANNEL_BOUND (>0):
-    // If the in-flight depth reaches the bound, new Data records are dropped at source Collect.
-    let bound = std::env::var("PULSE_CHANNEL_BOUND").ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-    let depth = Arc::new(AtomicI64::new(0));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<EventMsg>();
+        // Soft-bound drop policy controlled by env PULSE_CHANNEL_BOUND (>0):
+        // If the in-flight depth reaches the bound, new Data records are dropped at source Collect.
+        let bound = std::env::var("PULSE_CHANNEL_BOUND")
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        let depth = Arc::new(AtomicI64::new(0));
 
         struct ExecCtx {
             tx: tokio::sync::mpsc::UnboundedSender<EventMsg>,
@@ -341,7 +351,9 @@ impl Executor {
             fn collect(&mut self, record: Record) {
                 // Soft-bound: drop data if depth reached bound
                 if self.bound > 0 && self.depth.load(Ordering::Relaxed) >= self.bound {
-                    metrics::DROPPED_RECORDS.with_label_values(&["channel_full"]).inc();
+                    metrics::DROPPED_RECORDS
+                        .with_label_values(&["channel_full"])
+                        .inc();
                     return;
                 }
                 if self.tx.send(EventMsg::Data(record)).is_ok() {
@@ -363,7 +375,7 @@ impl Executor {
             }
         }
 
-    let mut source = self.source.take().ok_or_else(|| anyhow::anyhow!("no source"))?;
+        let mut source = self.source.take().ok_or_else(|| anyhow::anyhow!("no source"))?;
         let mut ops = std::mem::take(&mut self.operators);
         let mut sink = self.sink.take().ok_or_else(|| anyhow::anyhow!("no sink"))?;
 
@@ -516,8 +528,8 @@ impl Executor {
 
 pub mod prelude {
     pub use super::{
-        Context, EventTime, Executor, KvState, Operator, Record, Result, Sink, Source, Watermark,
-        CheckpointMeta, SnapshotId,
+        CheckpointMeta, Context, EventTime, Executor, KvState, Operator, Record, Result, Sink, SnapshotId,
+        Source, Watermark,
     };
 }
 

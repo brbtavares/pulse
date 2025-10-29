@@ -22,8 +22,7 @@ async fn main() -> Result<()> {
     // Sliding average: size=5 minutes, slide=1 minute over field `value` grouped by `device`.
     let op = WindowedAggregate::sliding_avg("device", 5 * 60_000, 60_000, "value");
 
-    exec
-        .source(FileSource::jsonl(input, "event_time"))
+    exec.source(FileSource::jsonl(input, "event_time"))
         .operator(op)
         .sink(FileSink::stdout());
 

@@ -10,9 +10,9 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use tracing::{instrument, info_span};
-use pulse_core::{Context, EventTime, Operator, Record, Result, Watermark};
 use chrono::{TimeZone, Utc};
+use pulse_core::{Context, EventTime, Operator, Record, Result, Watermark};
+use tracing::{info_span, instrument};
 pub mod time;
 pub mod window;
 pub use time::{WatermarkClock, WatermarkPolicy};
@@ -65,13 +65,17 @@ where
     #[instrument(name = "map_on_element", skip_all)]
     async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
         let outs = self.func.call(rec.value).await?;
-        pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["Map", "receive"]).inc();
+        pulse_core::metrics::OP_THROUGHPUT
+            .with_label_values(&["Map", "receive"])
+            .inc();
         for v in outs {
             ctx.collect(Record {
                 event_time: rec.event_time,
                 value: v.clone(),
             });
-            pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["Map", "emit"]).inc();
+            pulse_core::metrics::OP_THROUGHPUT
+                .with_label_values(&["Map", "emit"])
+                .inc();
         }
         Ok(())
     }
@@ -122,10 +126,14 @@ where
 {
     #[instrument(name = "filter_on_element", skip_all)]
     async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
-        pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["Filter", "receive"]).inc();
+        pulse_core::metrics::OP_THROUGHPUT
+            .with_label_values(&["Filter", "receive"])
+            .inc();
         if self.pred.call(&rec.value).await? {
             ctx.collect(rec);
-            pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["Filter", "emit"]).inc();
+            pulse_core::metrics::OP_THROUGHPUT
+                .with_label_values(&["Filter", "emit"])
+                .inc();
         }
         Ok(())
     }
@@ -152,7 +160,9 @@ impl KeyBy {
 impl Operator for KeyBy {
     #[instrument(name = "keyby_on_element", skip_all)]
     async fn on_element(&mut self, ctx: &mut dyn Context, mut rec: Record) -> Result<()> {
-        pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["KeyBy", "receive"]).inc();
+        pulse_core::metrics::OP_THROUGHPUT
+            .with_label_values(&["KeyBy", "receive"])
+            .inc();
         let key = rec
             .value
             .get(&self.field)
@@ -165,7 +175,9 @@ impl Operator for KeyBy {
         obj.insert("key".to_string(), key);
         rec.value = serde_json::Value::Object(obj);
         ctx.collect(rec);
-        pulse_core::metrics::OP_THROUGHPUT.with_label_values(&["KeyBy", "emit"]).inc();
+        pulse_core::metrics::OP_THROUGHPUT
+            .with_label_values(&["KeyBy", "emit"])
+            .inc();
         Ok(())
     }
 }
@@ -561,7 +573,7 @@ fn finalize_value(state: &AggState, agg: &AggKind) -> serde_json::Value {
 impl Operator for WindowedAggregate {
     async fn on_element(&mut self, ctx: &mut dyn Context, rec: Record) -> Result<()> {
         let ts_ms = rec.event_time.timestamp_millis() as i128; // ms
-        // Late data handling: if we have a watermark and this event is older than (wm - allowed_lateness), drop
+                                                               // Late data handling: if we have a watermark and this event is older than (wm - allowed_lateness), drop
         if let Some(wm) = self.last_wm_ms {
             if ts_ms < (wm - (self.allowed_lateness_ms as i128)) {
                 match self.late_policy {
@@ -587,7 +599,10 @@ impl Operator for WindowedAggregate {
                 // Optional: schedule a timer at end
                 let _ = ctx
                     .timers()
-                    .register_event_time_timer(pulse_core::EventTime(Utc.timestamp_millis_opt(end as i64).unwrap()), None)
+                    .register_event_time_timer(
+                        pulse_core::EventTime(Utc.timestamp_millis_opt(end as i64).unwrap()),
+                        None,
+                    )
                     .await;
             }
             WindowKind::Sliding { size_ms, slide_ms } => {
@@ -604,7 +619,10 @@ impl Operator for WindowedAggregate {
                         update_state(&mut entry.1, &self.agg, &rec.value);
                         let _ = ctx
                             .timers()
-                            .register_event_time_timer(pulse_core::EventTime(Utc.timestamp_millis_opt(end as i64).unwrap()), None)
+                            .register_event_time_timer(
+                                pulse_core::EventTime(Utc.timestamp_millis_opt(end as i64).unwrap()),
+                                None,
+                            )
                             .await;
                     }
                 }
@@ -656,7 +674,10 @@ impl Operator for WindowedAggregate {
                 let end = ts_ms + (gap_ms as i128);
                 let _ = ctx
                     .timers()
-                    .register_event_time_timer(pulse_core::EventTime(Utc.timestamp_millis_opt(end as i64).unwrap()), None)
+                    .register_event_time_timer(
+                        pulse_core::EventTime(Utc.timestamp_millis_opt(end as i64).unwrap()),
+                        None,
+                    )
                     .await;
             }
         }
@@ -697,7 +718,10 @@ impl Operator for WindowedAggregate {
                             out.insert("distinct_count".into(), val);
                         }
                     }
-                    ctx.collect(Record { event_time: wm.0 .0, value: serde_json::Value::Object(out) });
+                    ctx.collect(Record {
+                        event_time: wm.0 .0,
+                        value: serde_json::Value::Object(out),
+                    });
                     self.by_window.remove(&(end, key));
                 }
             }
@@ -729,7 +753,10 @@ impl Operator for WindowedAggregate {
                                     out.insert("distinct_count".into(), val);
                                 }
                             }
-                            ctx.collect(Record { event_time: wm.0 .0, value: serde_json::Value::Object(out) });
+                            ctx.collect(Record {
+                                event_time: wm.0 .0,
+                                value: serde_json::Value::Object(out),
+                            });
                             self.sessions.remove(&key);
                         }
                     }
@@ -776,7 +803,10 @@ impl Operator for WindowedAggregate {
                             out.insert("distinct_count".into(), val);
                         }
                     }
-                    ctx.collect(Record { event_time: when.0, value: serde_json::Value::Object(out) });
+                    ctx.collect(Record {
+                        event_time: when.0,
+                        value: serde_json::Value::Object(out),
+                    });
                     self.by_window.remove(&(end, key));
                 }
             }
@@ -807,7 +837,10 @@ impl Operator for WindowedAggregate {
                                     out.insert("distinct_count".into(), val);
                                 }
                             }
-                            ctx.collect(Record { event_time: when.0, value: serde_json::Value::Object(out) });
+                            ctx.collect(Record {
+                                event_time: when.0,
+                                value: serde_json::Value::Object(out),
+                            });
                             self.sessions.remove(&key);
                         }
                     }
@@ -891,9 +924,12 @@ mod window_tests {
         op.on_element(&mut ctx, record_with(1_000, "a")).await.unwrap();
         op.on_element(&mut ctx, record_with(1_010, "a")).await.unwrap();
         // Watermark after end of window 0..60000
-        op.on_watermark(&mut ctx, Watermark(EventTime(Utc.timestamp_millis_opt(60_000).unwrap())))
-            .await
-            .unwrap();
+        op.on_watermark(
+            &mut ctx,
+            Watermark(EventTime(Utc.timestamp_millis_opt(60_000).unwrap())),
+        )
+        .await
+        .unwrap();
         assert_eq!(ctx.out.len(), 1);
         assert_eq!(ctx.out[0].value["count"], serde_json::json!(2));
     }
@@ -1031,17 +1067,35 @@ mod tests {
     #[tokio::test]
     async fn windowed_allowed_lateness_defers_emission() {
         let mut op = WindowedAggregate::tumbling_count("word", 60_000).with_allowed_lateness(30_000);
-        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        let mut ctx = TestCtx {
+            out: vec![],
+            kv: Arc::new(TestState),
+            timers: Arc::new(TestTimers),
+        };
         // Two events in first minute window
-        op.on_element(&mut ctx, rec(serde_json::json!({"word":"a"}))).await.unwrap();
-        op.on_element(&mut ctx, rec(serde_json::json!({"word":"a"}))).await.unwrap();
+        op.on_element(&mut ctx, rec(serde_json::json!({"word":"a"})))
+            .await
+            .unwrap();
+        op.on_element(&mut ctx, rec(serde_json::json!({"word":"a"})))
+            .await
+            .unwrap();
         // Watermark at window end should NOT emit due to allowed lateness of 30s
         let base = Utc::now();
-        let end_ms = ((base.timestamp_millis()/60_000)*60_000 + 60_000) as i64;
-        op.on_watermark(&mut ctx, Watermark(EventTime(Utc.timestamp_millis_opt(end_ms).unwrap()))).await.unwrap();
+        let end_ms = ((base.timestamp_millis() / 60_000) * 60_000 + 60_000) as i64;
+        op.on_watermark(
+            &mut ctx,
+            Watermark(EventTime(Utc.timestamp_millis_opt(end_ms).unwrap())),
+        )
+        .await
+        .unwrap();
         assert!(ctx.out.is_empty());
         // After lateness passes, emission should occur
-        op.on_watermark(&mut ctx, Watermark(EventTime(Utc.timestamp_millis_opt(end_ms + 30_000).unwrap()))).await.unwrap();
+        op.on_watermark(
+            &mut ctx,
+            Watermark(EventTime(Utc.timestamp_millis_opt(end_ms + 30_000).unwrap())),
+        )
+        .await
+        .unwrap();
         assert!(!ctx.out.is_empty());
     }
 
@@ -1049,22 +1103,49 @@ mod tests {
     async fn windowed_agg_avg_and_distinct() {
         let mut avg_op = WindowedAggregate::tumbling_avg("key", 60_000, "x");
         let mut distinct_op = WindowedAggregate::tumbling_distinct("key", 60_000, "s");
-        let mut ctx = TestCtx { out: vec![], kv: Arc::new(TestState), timers: Arc::new(TestTimers) };
+        let mut ctx = TestCtx {
+            out: vec![],
+            kv: Arc::new(TestState),
+            timers: Arc::new(TestTimers),
+        };
         // feed two records in same window
-        avg_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","x": 1}))).await.unwrap();
-        avg_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","x": 3}))).await.unwrap();
+        avg_op
+            .on_element(&mut ctx, rec(serde_json::json!({"key":"k","x": 1})))
+            .await
+            .unwrap();
+        avg_op
+            .on_element(&mut ctx, rec(serde_json::json!({"key":"k","x": 3})))
+            .await
+            .unwrap();
         // watermark end of window
-        let wm = pulse_core::Watermark(pulse_core::EventTime(Utc.timestamp_millis_opt(((Utc::now().timestamp_millis()/60_000)*60_000 + 60_000) as i64).unwrap()));
+        let wm = pulse_core::Watermark(pulse_core::EventTime(
+            Utc.timestamp_millis_opt(((Utc::now().timestamp_millis() / 60_000) * 60_000 + 60_000) as i64)
+                .unwrap(),
+        ));
         avg_op.on_watermark(&mut ctx, wm).await.unwrap();
         // Expect one output with avg=2.0
         assert!(ctx.out.iter().any(|r| r.value.get("avg").is_some()));
         // Reset output for distinct
         ctx.out.clear();
-        distinct_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","s":"a"}))).await.unwrap();
-        distinct_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","s":"a"}))).await.unwrap();
-        distinct_op.on_element(&mut ctx, rec(serde_json::json!({"key":"k","s":"b"}))).await.unwrap();
+        distinct_op
+            .on_element(&mut ctx, rec(serde_json::json!({"key":"k","s":"a"})))
+            .await
+            .unwrap();
+        distinct_op
+            .on_element(&mut ctx, rec(serde_json::json!({"key":"k","s":"a"})))
+            .await
+            .unwrap();
+        distinct_op
+            .on_element(&mut ctx, rec(serde_json::json!({"key":"k","s":"b"})))
+            .await
+            .unwrap();
         distinct_op.on_watermark(&mut ctx, wm).await.unwrap();
         // Expect distinct_count = 2
-        assert!(ctx.out.iter().any(|r| r.value.get("distinct_count").and_then(|v| v.as_i64()).unwrap_or(0) == 2));
+        assert!(ctx.out.iter().any(|r| r
+            .value
+            .get("distinct_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            == 2));
     }
 }

@@ -8,4 +8,3 @@ pub mod rocks;
 pub use mem::InMemoryState;
 #[cfg(feature = "rocksdb")]
 pub use rocks::RocksDbState;
-
