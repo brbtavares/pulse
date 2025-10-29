@@ -1,6 +1,6 @@
 [package]
 name = "pulse-bin"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Pulse Contributors"]
 edition = "2021"
 license.workspace = true

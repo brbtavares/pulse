@@ -2,8 +2,12 @@
 shared-version = false
 allow-branch = ["main"]
 dependent-version = "upgrade"
-push = false
-tag = false
+push = true
+tag = true
+tag-name = "v{{version}}"
 publish = true
 release = false
 workspace = true
+
+
+# cargo release version 0.1.3 --workspace

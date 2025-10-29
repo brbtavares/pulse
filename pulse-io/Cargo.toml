@@ -1,6 +1,6 @@
 [package]
 name = "pulse-io"
-version = "0.1.1"
+version = "0.1.2"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -20,7 +20,7 @@ parquet = ["dep:parquet", "arrow"]
 kafka = ["dep:rdkafka", "dep:futures", "dep:base64"]
 
 [dependencies]
-pulse-core = { version = "0.1.1", path = "../pulse-core" }
+pulse-core = { version = "0.1.2", path = "../pulse-core" }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
