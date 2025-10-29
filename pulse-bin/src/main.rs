@@ -94,42 +94,54 @@ async fn run_pipeline(path: std::path::PathBuf) -> anyhow::Result<()> {
     };
 
     let mut exec = pulse_core::Executor::new();
-    exec.source(src)
+    exec
+        .source(src)
         .operator(pulse_ops::KeyBy::new(cfg.ops.count_by.clone().unwrap()))
-        .operator(op_window)
-        .sink(match cfg.sink.kind.as_str() {
-            "parquet" => {
-                let partition = if let Some(f) = &cfg.sink.partition_field {
-                    pulse_io::PartitionSpec::ByField { field: f.clone() }
-                } else {
-                    let fmt = cfg.sink.partition_format.clone().unwrap_or_else(|| "%Y-%m-%d".into());
-                    pulse_io::PartitionSpec::ByDate { field: "event_time".into(), fmt }
-                };
-                let conf = pulse_io::ParquetSinkConfig {
-                    out_dir: cfg.sink.out_dir.clone(),
-                    partition_by: partition,
-                    max_rows: 1_000_000,
-                    max_age: std::time::Duration::from_secs(300),
-                    compression: cfg.sink.compression.clone(),
-                    max_bytes: cfg.sink.max_bytes.map(|b| b as usize),
-                };
-                pulse_io::ParquetSink::new(conf)
-            }
-            #[cfg(feature = "kafka")]
-            "kafka" => {
-                let mut ks = pulse_io::KafkaSink::new(
-                    cfg.sink.bootstrap_servers.clone().unwrap(),
-                    cfg.sink.topic.clone().unwrap(),
-                );
-                ks.acks = cfg.sink.acks.clone();
-                ks
-            }
-            _ => {
-                // default to FileSink stdout for now
-                let _ = allowed_lateness_ms; // not yet wired
-                return Err(anyhow::anyhow!("unsupported sink kind"));
-            }
-        });
+        .operator(op_window);
+
+    // Choose sink by kind and attach to executor
+    match cfg.sink.kind.as_str() {
+        "parquet" => {
+            let partition = if let Some(f) = &cfg.sink.partition_field {
+                pulse_io::PartitionSpec::ByField { field: f.clone() }
+            } else {
+                let fmt = cfg.sink.partition_format.clone().unwrap_or_else(|| "%Y-%m-%d".into());
+                pulse_io::PartitionSpec::ByDate { field: "event_time".into(), fmt }
+            };
+            let conf = pulse_io::ParquetSinkConfig {
+                out_dir: cfg.sink.out_dir.clone(),
+                partition_by: partition,
+                max_rows: 1_000_000,
+                max_age: std::time::Duration::from_secs(300),
+                compression: cfg.sink.compression.clone(),
+                max_bytes: cfg.sink.max_bytes.map(|b| b as usize),
+            };
+            exec.sink(pulse_io::ParquetSink::new(conf));
+        }
+        "file" => {
+            // For file sink, use out_dir as file path; if empty, write to stdout
+            let path = if cfg.sink.out_dir.as_os_str().is_empty() {
+                None
+            } else {
+                Some(cfg.sink.out_dir.to_string_lossy().to_string())
+            };
+            exec.sink(pulse_io::FileSink { path });
+        }
+        #[cfg(feature = "kafka")]
+        "kafka" => {
+            let mut ks = pulse_io::KafkaSink::new(
+                cfg.sink.bootstrap_servers.clone().unwrap(),
+                cfg.sink.topic.clone().unwrap(),
+            );
+            ks.acks = cfg.sink.acks.clone();
+            exec.sink(ks);
+        }
+        other => {
+            let _ = allowed_lateness_ms; // not yet wired
+            return Err(anyhow::anyhow!(format!("unsupported sink kind: {}", other)));
+        }
+    }
+
     exec.run().await?;
     Ok(())
 }
@@ -338,6 +350,47 @@ mod tests {
 
         // Cleanup
         remove_dir_all_quiet(&tmp_out);
+    }
+
+    #[tokio::test]
+    async fn golden_simple_pipeline_file_sink_lines() {
+        // Use the same fixture pipeline but switch sink to file and assert line count.
+        let mut cfg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        cfg_path.pop(); // workspace root
+        let pipeline_toml = cfg_path.join("pulse-tests/fixtures/simple/pipeline.toml");
+        assert!(pipeline_toml.exists(), "fixture pipeline missing: {:?}", pipeline_toml);
+
+        // Load config and tweak: absolute input path and file sink to a temp file
+        let text = tokio::fs::read_to_string(&pipeline_toml).await.unwrap();
+        let mut cfg: pulse_core::config::PipelineConfig = toml::from_str(&text).unwrap();
+        let abs_input = cfg_path.join("pulse-tests/fixtures/simple/input.jsonl");
+        cfg.source.path = abs_input;
+        cfg.sink.kind = "file".into();
+        // out_dir field will be interpreted as file path for file sink
+        let out_path = std::env::temp_dir().join(format!(
+            "pulse_golden_out_file_{}.jsonl",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        cfg.sink.out_dir = out_path.clone();
+
+        // Write a temp config file
+        let tmp_cfg = out_path.with_file_name("pipeline.file.temp.toml");
+        if let Some(parent) = tmp_cfg.parent() { let _ = std::fs::create_dir_all(parent); }
+        tokio::fs::write(&tmp_cfg, toml::to_string(&cfg).unwrap()).await.unwrap();
+
+        // Ensure previous output removed
+        let _ = std::fs::remove_file(&out_path);
+
+        // Run pipeline
+        run_pipeline(tmp_cfg.clone()).await.unwrap();
+
+        // Read lines back and assert row count = 2 (keys a and b)
+        let data = tokio::fs::read_to_string(&out_path).await.unwrap();
+        let lines: Vec<&str> = data.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        // Cleanup
+        let _ = std::fs::remove_file(&out_path);
     }
 
 }
